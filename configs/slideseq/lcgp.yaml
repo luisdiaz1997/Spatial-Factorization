@@ -1,0 +1,29 @@
+# SlideseqV2 with LCGP prior
+
+name: slideseq_lcgp
+seed: 42
+
+dataset:
+  name: slideseq
+  spatial_scale: 50.0
+  filter_mt: true
+  min_counts: 100
+  min_cells: 10
+
+model:
+  n_components: 10
+  spatial: true
+  gp_class: LCGP
+  lengthscale: 4.0
+  K: 50
+  mode: expanded
+  loadings_mode: projected
+
+training:
+  max_iter: 10000
+  learning_rate: 0.01
+  optimizer: Adam
+  verbose: true
+
+output:
+  dir: outputs/slideseq/lcgp
