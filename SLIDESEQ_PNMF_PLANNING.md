@@ -16,7 +16,7 @@ This is a simpler baseline before adding spatial GP priors.
 
 We will implement this in stages, verifying each stage works before moving to the next. Each stage builds on the previous ones.
 
-### Stage 0: Setup & Installation `⬜ NOT DONE`
+### Stage 0: Setup & Installation `🟩 DONE`
 
 **Goal:** Ensure the package is installable and CLI entry points work.
 
@@ -33,10 +33,10 @@ spatial_factorization --help
 ```
 
 **Deliverables:**
-- [ ] `setup.py` - Minimal wrapper (see Probabilistic-NMF)
-- [ ] Update `pyproject.toml` entry point: `spatial_factorization = "spatial_factorization.cli:cli"`
-- [ ] Add `click>=8.0` to dependencies
-- [ ] Verify `spatial_factorization --help` works
+- [x] `setup.py` - Minimal wrapper (see Probabilistic-NMF)
+- [x] Update `pyproject.toml` entry point: `spatial_factorization = "spatial_factorization.cli:cli"`
+- [x] Add `click>=8.0` to dependencies
+- [x] Verify `spatial_factorization --help` works
 
 ---
 

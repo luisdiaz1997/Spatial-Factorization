@@ -49,6 +49,7 @@ Spatial-Factorization/
 │   ├── cli.py                  # Click CLI entry point
 │   ├── analysis.py             # plot_factors, etc.
 │   ├── commands/               # CLI commands
+│   │   ├── __init__.py
 │   │   ├── preprocess.py       # Standardize data format
 │   │   ├── train.py            # Train PNMF model
 │   │   ├── analyze.py          # Compute metrics
@@ -59,10 +60,13 @@ Spatial-Factorization/
 │       ├── preprocessed.py     # Load preprocessed .npy files
 │       ├── slideseq.py         # SlideseqV2 loader
 │       └── tenxvisium.py       # 10x Visium loader
+├── scripts/
+│   └── install_deps.sh         # Install PNMF/GPzoo from sibling dirs
 ├── configs/                    # YAML experiment configs
 │   └── slideseq/
 │       └── pnmf.yaml
 ├── outputs/                    # Generated (git-ignored)
+├── setup.py                    # Minimal wrapper (PEP 517 compat)
 ├── pyproject.toml
 └── README.md
 ```
@@ -115,6 +119,43 @@ Note: PNMF's sklearn API expects (N, D), so use `data.Y.T`.
 - **gpzoo**: GP backends (used internally by PNMF)
 - **scanpy, squidpy**: Data loading
 - **pyyaml**: Config parsing
+- **click**: CLI framework
+
+### Installing PNMF and GPzoo
+
+PNMF and GPzoo are sibling repositories that must be installed locally for development. The `scripts/install_deps.sh` helper script handles this:
+
+```bash
+# Install PNMF and GPzoo from sibling directories
+./scripts/install_deps.sh
+```
+
+The script expects:
+- `../Probabilistic-NMF/` - PNMF repository
+- `../GPzoo/` - GPzoo repository
+
+Adjust paths if your directory structure differs.
+
+### Installation
+
+```bash
+# 1. Install dependencies (PNMF, GPzoo)
+./scripts/install_deps.sh
+
+# 2. Install spatial-factorization
+pip install -e .
+
+# 3. Verify CLI works
+spatial_factorization --help
+```
+
+**Note:** The CLI entry point is configured in `pyproject.toml` as:
+```
+[project.scripts]
+spatial_factorization = "spatial_factorization.cli:cli"
+```
+
+A minimal `setup.py` wrapper is provided for PEP 517 backwards compatibility.
 
 ## Relationship to Other Repos
 
@@ -124,8 +165,21 @@ Note: PNMF's sklearn API expects (N, D), so use `data.Y.T`.
 | **PNMF** | sklearn API | `PNMF` class, ELBO computation, `spatial=True` support |
 | **Spatial-Factorization** | Analysis | Dataset loaders, configs, notebooks |
 
+## Implementation Status
+
+See [SLIDESEQ_PNMF_PLANNING.md](./SLIDESEQ_PNMF_PLANNING.md) for the detailed 4-stage implementation plan.
+
+| Stage | Status | Description |
+|-------|--------|-------------|
+| 0 | **DONE** | Setup & Installation (CLI entry point, package structure) |
+| 1 | TODO | Preprocess command (standardize data format) |
+| 2 | TODO | Train command (PNMF model fitting) |
+| 3 | TODO | Analyze command (Moran's I, reconstruction metrics) |
+| 4 | TODO | Figures command (publication plots) |
+
 ## Future Work
 
+- [ ] Implement Stages 1-4 (see SLIDESEQ_PNMF_PLANNING.md)
 - [ ] Add more dataset loaders (Stereo-seq, MERFISH, etc.)
 - [ ] Create analysis notebooks for each dataset
 - [ ] Add visualization utilities
