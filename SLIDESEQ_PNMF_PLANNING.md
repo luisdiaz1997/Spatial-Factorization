@@ -40,7 +40,7 @@ spatial_factorization --help
 
 ---
 
-### Stage 1: Preprocess Command `⬜ NOT DONE`
+### Stage 1: Preprocess Command `🟩 DONE`
 
 **Goal:** Standardize data format (run once per dataset).
 
@@ -51,10 +51,10 @@ spatial_factorization preprocess -c configs/slideseq/pnmf.yaml
 **Expected output:**
 ```
 Preprocessing dataset: slideseq
-  Spots (N): 34000, Genes (D): 1000
+  Spots (N): 41783, Genes (D): 17702
 Preprocessed data saved to: outputs/slideseq_pnmf/preprocessed/
-  X: (34000, 2)
-  Y: (1000, 34000)
+  X: (41783, 2)
+  Y: (17702, 41783)
   C: 14 groups
 ```
 
@@ -65,9 +65,13 @@ Preprocessed data saved to: outputs/slideseq_pnmf/preprocessed/
 - `outputs/slideseq_pnmf/preprocessed/metadata.json`
 
 **Deliverables:**
-- [ ] `spatial_factorization/commands/preprocess.py`
-- [ ] `spatial_factorization/datasets/preprocessed.py`
-- [ ] `configs/slideseq/pnmf.yaml`
+- [x] `spatial_factorization/commands/preprocess.py`
+- [x] `spatial_factorization/datasets/base.py` - added `group_names` and `load_preprocessed()`
+- [x] `spatial_factorization/datasets/slideseq.py` - extract real cluster names
+- [x] `spatial_factorization/datasets/tenxvisium.py` - extract real cluster names
+- [x] `configs/slideseq/pnmf.yaml`
+- [x] `tests/test_preprocessed.py` - integration test
+- [x] `scripts/setup_env.sh` - environment setup script
 
 ---
 

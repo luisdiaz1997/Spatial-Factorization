@@ -6,7 +6,7 @@ import numpy as np
 import torch
 
 from .base import DatasetLoader, SpatialData
-from .slideseq import rescale_spatial_coords, compute_size_factors
+from .slideseq import rescale_spatial_coords
 
 
 class TenxVisiumLoader(DatasetLoader):
@@ -67,31 +67,29 @@ class TenxVisiumLoader(DatasetLoader):
             Y_matrix = Y_matrix.toarray()
         Y_np = np.asarray(Y_matrix, dtype=np.float32).T  # (D, N)
 
-        # Compute size factors
-        V_np = compute_size_factors(Y_np.T)  # Pass (N, D)
-
         # Extract groups if available (for MGGP)
         groups_t = None
         n_groups = 0
+        group_names = None
         for cluster_key in ["cluster", "leiden", "louvain"]:
             if cluster_key in adata.obs:
                 clusters = adata.obs[cluster_key].astype("category")
                 cluster_codes = clusters.cat.codes.to_numpy()
                 groups_t = torch.tensor(cluster_codes, dtype=torch.long)
                 n_groups = len(clusters.cat.categories)
+                group_names = list(clusters.cat.categories)
                 break
 
         # Convert to tensors
         X_t = torch.tensor(X_np, dtype=torch.float32)
         Y_t = torch.tensor(Y_np, dtype=torch.float32)
-        V_t = torch.tensor(V_np, dtype=torch.float32)
 
         return SpatialData(
             X=X_t,
             Y=Y_t,
-            V=V_t,
             groups=groups_t,
             n_groups=n_groups,
             gene_names=list(adata.var_names),
             spot_names=list(adata.obs_names),
+            group_names=group_names,
         )

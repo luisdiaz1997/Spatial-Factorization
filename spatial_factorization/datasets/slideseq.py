@@ -15,23 +15,6 @@ def rescale_spatial_coords(X: np.ndarray) -> np.ndarray:
     return (X - X_min) / (X_max - X_min + 1e-8)
 
 
-def compute_size_factors(Y: np.ndarray) -> np.ndarray:
-    """Compute size factors (library size normalization).
-
-    Parameters
-    ----------
-    Y : np.ndarray
-        Count matrix, shape (N, D) - spots x genes.
-
-    Returns
-    -------
-    np.ndarray
-        Size factors, shape (N,).
-    """
-    lib_sizes = Y.sum(axis=1)
-    return lib_sizes / np.median(lib_sizes)
-
-
 class SlideseqLoader(DatasetLoader):
     """Loader for SlideseqV2 dataset from squidpy."""
 
@@ -90,29 +73,27 @@ class SlideseqLoader(DatasetLoader):
             Y_matrix = Y_matrix.toarray()
         Y_np = np.asarray(Y_matrix, dtype=np.float32).T  # (D, N)
 
-        # Compute size factors
-        V_np = compute_size_factors(Y_np.T)  # Pass (N, D)
-
         # Extract groups if available (for MGGP)
         groups_t = None
         n_groups = 0
+        group_names = None
         if "cluster" in adata.obs:
             clusters = adata.obs["cluster"].astype("category")
             cluster_codes = clusters.cat.codes.to_numpy()
             groups_t = torch.tensor(cluster_codes, dtype=torch.long)
             n_groups = len(clusters.cat.categories)
+            group_names = list(clusters.cat.categories)
 
         # Convert to tensors
         X_t = torch.tensor(X_np, dtype=torch.float32)
         Y_t = torch.tensor(Y_np, dtype=torch.float32)
-        V_t = torch.tensor(V_np, dtype=torch.float32)
 
         return SpatialData(
             X=X_t,
             Y=Y_t,
-            V=V_t,
             groups=groups_t,
             n_groups=n_groups,
             gene_names=list(adata.var_names),
             spot_names=list(adata.obs_names),
+            group_names=group_names,
         )

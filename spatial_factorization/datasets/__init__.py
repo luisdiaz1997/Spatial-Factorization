@@ -1,6 +1,6 @@
 """Dataset loaders for spatial transcriptomics data."""
 
-from .base import SpatialData, DatasetLoader
+from .base import SpatialData, DatasetLoader, load_preprocessed
 from .slideseq import SlideseqLoader
 from .tenxvisium import TenxVisiumLoader
 
@@ -37,5 +37,6 @@ __all__ = [
     "SlideseqLoader",
     "TenxVisiumLoader",
     "load_dataset",
+    "load_preprocessed",
     "LOADERS",
 ]

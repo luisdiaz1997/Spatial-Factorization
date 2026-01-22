@@ -14,6 +14,39 @@ This document contains the detailed implementation plan for:
 
 ---
 
+## Environment Setup
+
+**IMPORTANT:** Use a dedicated conda environment to avoid dependency conflicts.
+
+```bash
+# Create new conda environment named 'factorization'
+conda create -n factorization python=3.10 -y
+conda activate factorization
+
+# Install core dependencies
+pip install torch>=2.0.0 numpy>=1.21.0 scipy>=1.7.0 pandas>=1.3.0
+pip install scikit-learn>=1.0.0 tqdm>=4.62.0 pyyaml>=6.0 click>=8.0
+
+# Install bioinformatics packages
+pip install scanpy>=1.9.0 anndata>=0.8.0 squidpy>=1.2.0
+
+# Install testing dependencies
+pip install pytest>=7.0.0
+
+# Install this package
+pip install -e .
+
+# Install sibling packages (PNMF, GPzoo) - adjust paths as needed
+pip install -e ../Probabilistic-NMF
+pip install -e ../GPzoo
+```
+
+**Current environment:** `factorization` (Python 3.10)
+
+**Note:** The previous environment had squidpy/numba segfault issues. Using specific versions (scanpy==1.10.0, squidpy==1.5.0) with Python 3.10 should resolve this.
+
+---
+
 ## Project Overview
 
 This repository provides dataset loaders and configuration utilities for spatial transcriptomics analysis. It is designed to work with the PNMF package for model fitting.

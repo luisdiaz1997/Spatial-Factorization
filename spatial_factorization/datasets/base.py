@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import List, Optional
+from pathlib import Path
+from typing import List, Optional, Union
 
+import numpy as np
 import torch
 
 
@@ -20,8 +23,6 @@ class SpatialData:
     Y : torch.Tensor
         Count matrix, shape (D, N) where D is number of genes.
         Note: This is genes x spots (transposed from typical scanpy format).
-    V : torch.Tensor
-        Size factors for normalization, shape (N,).
     groups : torch.Tensor, optional
         Group labels for MGGP models, shape (N,).
     n_groups : int
@@ -30,15 +31,17 @@ class SpatialData:
         Names of genes (length D).
     spot_names : list of str, optional
         Names of spots/cells (length N).
+    group_names : list of str, optional
+        Names of groups (length G).
     """
 
     X: torch.Tensor  # (N, 2) spatial coordinates
     Y: torch.Tensor  # (D, N) count matrix (genes x spots)
-    V: torch.Tensor  # (N,) size factors
     groups: Optional[torch.Tensor] = None  # (N,) group labels
     n_groups: int = 0
     gene_names: Optional[List[str]] = field(default=None)
     spot_names: Optional[List[str]] = field(default=None)
+    group_names: Optional[List[str]] = field(default=None)
 
     @property
     def n_spots(self) -> int:
@@ -55,11 +58,11 @@ class SpatialData:
         return SpatialData(
             X=self.X.to(device),
             Y=self.Y.to(device),
-            V=self.V.to(device),
             groups=self.groups.to(device) if self.groups is not None else None,
             n_groups=self.n_groups,
             gene_names=self.gene_names,
             spot_names=self.spot_names,
+            group_names=self.group_names,
         )
 
     def __repr__(self) -> str:
@@ -87,3 +90,45 @@ class DatasetLoader(ABC):
             Loaded and preprocessed data.
         """
         pass
+
+
+def load_preprocessed(output_dir: Union[Path, str]) -> SpatialData:
+    """Load preprocessed data from directory.
+
+    After running the preprocess command, this function provides a fast path
+    to load the standardized data without re-running QC filtering.
+
+    Parameters
+    ----------
+    output_dir : Path or str
+        Output directory containing preprocessed/ subdirectory.
+
+    Returns
+    -------
+    SpatialData
+        Loaded preprocessed data.
+    """
+    output_dir = Path(output_dir)
+    prep_dir = output_dir / "preprocessed"
+
+    if not prep_dir.exists():
+        raise ValueError(f"Preprocessed data directory not found: {prep_dir}")
+
+    # Load arrays
+    X = torch.from_numpy(np.load(prep_dir / "X.npy")).float()
+    Y = torch.from_numpy(np.load(prep_dir / "Y.npy")).float()
+    C = torch.from_numpy(np.load(prep_dir / "C.npy")).long()
+
+    # Load metadata
+    with open(prep_dir / "metadata.json") as f:
+        meta = json.load(f)
+
+    return SpatialData(
+        X=X,
+        Y=Y,
+        groups=C,
+        n_groups=meta["n_groups"],
+        gene_names=meta["gene_names"],
+        spot_names=meta["spot_names"],
+        group_names=meta.get("group_names"),
+    )

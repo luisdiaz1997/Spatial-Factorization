@@ -1,0 +1,28 @@
+# SlideseqV2 with non-spatial PNMF (baseline model)
+# Run: spatial_factorization preprocess -c configs/slideseq/pnmf.yaml
+
+name: slideseq_pnmf
+seed: 67
+
+dataset:
+  name: slideseq
+  spatial_scale: 50.0
+  filter_mt: true
+  min_counts: 100
+  min_cells: 10
+
+model:
+  n_components: 10
+  spatial: false
+  mode: expanded
+  loadings_mode: projected
+
+training:
+  max_iter: 500
+  learning_rate: 0.01
+  optimizer: Adam
+  tol: 1e-4
+  verbose: true
+
+output:
+  dir: outputs/slideseq_pnmf
