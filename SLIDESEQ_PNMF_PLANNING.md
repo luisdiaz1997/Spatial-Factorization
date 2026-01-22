@@ -10,6 +10,181 @@ This is a simpler baseline before adding spatial GP priors.
 
 ---
 
+## Development Strategy: 5-Stage Implementation Plan
+
+**Status Legend:** `⬜` NOT DONE | `🟩` DONE
+
+We will implement this in stages, verifying each stage works before moving to the next. Each stage builds on the previous ones.
+
+### Stage 0: Setup & Installation `⬜ NOT DONE`
+
+**Goal:** Ensure the package is installable and CLI entry points work.
+
+```bash
+# Create setup.py (see ../Probabilistic-NMF/setup.py for reference)
+# All metadata is in pyproject.toml, setup.py just calls setup()
+
+# Verify installation
+pip install -e .
+
+# Test CLI entry point
+spatial_factorization --help
+# Should show: preprocess, train, analyze, figures commands
+```
+
+**Deliverables:**
+- [ ] `setup.py` - Minimal wrapper (see Probabilistic-NMF)
+- [ ] Update `pyproject.toml` entry point: `spatial_factorization = "spatial_factorization.cli:cli"`
+- [ ] Add `click>=8.0` to dependencies
+- [ ] Verify `spatial_factorization --help` works
+
+---
+
+### Stage 1: Preprocess Command `⬜ NOT DONE`
+
+**Goal:** Standardize data format (run once per dataset).
+
+```bash
+spatial_factorization preprocess -c configs/slideseq/pnmf.yaml
+```
+
+**Expected output:**
+```
+Preprocessing dataset: slideseq
+  Spots (N): 34000, Genes (D): 1000
+Preprocessed data saved to: outputs/slideseq_pnmf/preprocessed/
+  X: (34000, 2)
+  Y: (1000, 34000)
+  C: 14 groups
+```
+
+**Files created:**
+- `outputs/slideseq_pnmf/preprocessed/X.npy`
+- `outputs/slideseq_pnmf/preprocessed/Y.npy`
+- `outputs/slideseq_pnmf/preprocessed/C.npy`
+- `outputs/slideseq_pnmf/preprocessed/metadata.json`
+
+**Deliverables:**
+- [ ] `spatial_factorization/commands/preprocess.py`
+- [ ] `spatial_factorization/datasets/preprocessed.py`
+- [ ] `configs/slideseq/pnmf.yaml`
+
+---
+
+### Stage 2: Train Command `⬜ NOT DONE`
+
+**Goal:** Train PNMF model and save results.
+
+```bash
+spatial_factorization train --config configs/slideseq/pnmf.yaml
+```
+
+**Expected output:**
+```
+Loading preprocessed data: 34000 spots, 1000 genes
+Training PNMF with 10 components...
+[Iteration 100] ELBO: -1234567.89
+[Iteration 200] ELBO: -1234000.00
+...
+Training complete!
+  ELBO: -1230000.00
+  Time: 123.4s
+  Saved to: outputs/slideseq_pnmf/
+```
+
+**Files created:**
+- `outputs/slideseq_pnmf/model.pth`
+- `outputs/slideseq_pnmf/elbo_history.csv`
+- `outputs/slideseq_pnmf/train_metadata.json`
+
+**Deliverables:**
+- [ ] `spatial_factorization/commands/train.py`
+
+---
+
+### Stage 3: Analyze Command `⬜ NOT DONE`
+
+**Goal:** Compute metrics (Moran's I, reconstruction error).
+
+```bash
+spatial_factorization analyze --config configs/slideseq/pnmf.yaml
+```
+
+**Expected output:**
+```
+Loading preprocessed data...
+Loading trained model...
+Computing Moran's I for spatial autocorrelation...
+Computing reconstruction error...
+Analysis complete!
+  Moran's I: [0.12, 0.08, ..., 0.15]
+  Reconstruction error: 0.234
+  Saved to: outputs/slideseq_pnmf/
+```
+
+**Files created:**
+- `outputs/slideseq_pnmf/metrics.json`
+- `outputs/slideseq_pnmf/factors.npy`
+- `outputs/slideseq_pnmf/moran_i.csv`
+
+**Deliverables:**
+- [ ] `spatial_factorization/commands/analyze.py`
+- [ ] `spatial_factorization/analysis.py` - `plot_factors()`, `dims_autocorr()`, etc.
+
+---
+
+### Stage 4: Figures Command `⬜ NOT DONE`
+
+**Goal:** Generate publication figures.
+
+```bash
+spatial_factorization figures --config configs/slideseq/pnmf.yaml
+```
+
+**Expected output:**
+```
+Loading preprocessed data...
+Loading analysis results...
+Generating figures...
+  figures/factors_spatial.png
+  figures/elbo_curve.png
+  figures/top_genes.png
+Figures saved to: outputs/slideseq_pnmf/figures/
+```
+
+**Files created:**
+- `outputs/slideseq_pnmf/figures/factors_spatial.png`
+- `outputs/slideseq_pnmf/figures/elbo_curve.png`
+- `outputs/slideseq_pnmf/figures/top_genes.png`
+
+**Deliverables:**
+- [ ] `spatial_factorization/commands/figures.py`
+
+---
+
+### Summary: Complete Pipeline
+
+```bash
+# Stage 0: Install
+pip install -e .
+
+# Stage 1: Preprocess (run once per dataset)
+spatial_factorization preprocess -c configs/slideseq/pnmf.yaml
+
+# Stage 2: Train
+spatial_factorization train --config configs/slideseq/pnmf.yaml
+
+# Stage 3: Analyze
+spatial_factorization analyze --config configs/slideseq/pnmf.yaml
+
+# Stage 4: Generate figures
+spatial_factorization figures --config configs/slideseq/pnmf.yaml
+```
+
+**Note:** Preprocess uses `-c` (short), train/analyze/figures use `--config` (long) - both work for all commands.
+
+---
+
 ## Code References (Borrow From Here)
 
 ### Data Loading - REUSE DIRECTLY
