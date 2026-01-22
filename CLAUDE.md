@@ -1,5 +1,19 @@
 # Spatial Factorization Development Notes
 
+---
+
+## URGENT: Active Implementation Plan
+
+**READ THIS FIRST:** [SLIDESEQ_PNMF_PLANNING.md](./SLIDESEQ_PNMF_PLANNING.md)
+
+This document contains the detailed implementation plan for:
+- CLI commands: `preprocess`, `train`, `analyze`, `figures`
+- Standardized data format (X, Y, C as .npy files)
+- Code references to borrow from GPzoo/PNMF
+- Four-stage pipeline architecture
+
+---
+
 ## Project Overview
 
 This repository provides dataset loaders and configuration utilities for spatial transcriptomics analysis. It is designed to work with the PNMF package for model fitting.
@@ -29,20 +43,26 @@ This repository provides dataset loaders and configuration utilities for spatial
 
 ```
 Spatial-Factorization/
-├── src/
-│   └── spatial_factorization/
-│       ├── __init__.py         # Package exports
-│       ├── config.py           # Config dataclasses
-│       └── datasets/           # Dataset loaders
-│           ├── __init__.py
-│           ├── base.py         # SpatialData container
-│           ├── slideseq.py     # SlideseqV2 loader
-│           └── tenxvisium.py   # 10x Visium loader
+├── spatial_factorization/
+│   ├── __init__.py             # Package exports
+│   ├── config.py               # Config dataclasses
+│   ├── cli.py                  # Click CLI entry point
+│   ├── analysis.py             # plot_factors, etc.
+│   ├── commands/               # CLI commands
+│   │   ├── preprocess.py       # Standardize data format
+│   │   ├── train.py            # Train PNMF model
+│   │   ├── analyze.py          # Compute metrics
+│   │   └── figures.py          # Generate plots
+│   └── datasets/               # Dataset loaders (dataset-specific)
+│       ├── __init__.py
+│       ├── base.py             # SpatialData container
+│       ├── preprocessed.py     # Load preprocessed .npy files
+│       ├── slideseq.py         # SlideseqV2 loader
+│       └── tenxvisium.py       # 10x Visium loader
 ├── configs/                    # YAML experiment configs
-│   ├── slideseq/
-│   └── tenxvisium/
-├── notebooks/                  # Analysis notebooks
-├── scripts/                    # CLI scripts
+│   └── slideseq/
+│       └── pnmf.yaml
+├── outputs/                    # Generated (git-ignored)
 ├── pyproject.toml
 └── README.md
 ```
@@ -82,11 +102,10 @@ model.fit(data.Y.T.numpy(), X=data.X.numpy())
 ### 3. SpatialData Container
 
 The `SpatialData` dataclass holds:
-- `X`: Spatial coordinates (N, 2)
-- `Y`: Count matrix (D, N) - genes x spots (GPzoo convention)
-- `V`: Size factors (N,)
-- `groups`: Optional group labels for MGGP
-- `gene_names`, `spot_names`: Metadata
+- `X`: Spatial coordinates (N, 2) - used in analysis/plotting, ignored in non-spatial training
+- `Y`: Count matrix (D, N) - genes x spots (GPzoo convention) - used in training
+- `C`: Group codes (N,) - used in analysis/plotting, ignored in non-spatial training
+- `gene_names`, `spot_names`, `group_names`: Metadata
 
 Note: PNMF's sklearn API expects (N, D), so use `data.Y.T`.
 
@@ -112,7 +131,20 @@ Note: PNMF's sklearn API expects (N, D), so use `data.Y.T`.
 - [ ] Add visualization utilities
 - [ ] Benchmark scripts
 
-## Usage Example
+## CLI Usage
+
+```bash
+# Install
+pip install -e .
+
+# Four-stage pipeline
+spatial_factorization preprocess -c configs/slideseq/pnmf.yaml  # Run once
+spatial_factorization train      -c configs/slideseq/pnmf.yaml
+spatial_factorization analyze    -c configs/slideseq/pnmf.yaml
+spatial_factorization figures    -c configs/slideseq/pnmf.yaml
+```
+
+## Python API Example
 
 ```python
 import torch
@@ -120,18 +152,16 @@ from spatial_factorization import Config, load_dataset
 from PNMF import PNMF
 
 # Load config
-config = Config.from_yaml("configs/slideseq/lcgp.yaml")
+config = Config.from_yaml("configs/slideseq/pnmf.yaml")
 torch.manual_seed(config.seed)
 
 # Load data
 data = load_dataset(config.dataset)
 print(f"Loaded {data.n_spots} spots, {data.n_genes} genes")
 
-# Fit model (when PNMF spatial=True is implemented)
+# Fit model
 model = PNMF(
     n_components=config.model.n_components,
-    spatial=config.model.spatial,
-    gp_class=config.model.gp_class,
     mode=config.model.mode,
     max_iter=config.training.max_iter,
     learning_rate=config.training.learning_rate,
@@ -140,8 +170,6 @@ model = PNMF(
 
 # PNMF expects (n_samples, n_features), SpatialData has (D, N)
 Y_sklearn = data.Y.T.numpy()  # (N, D)
-X_coords = data.X.numpy()      # (N, 2)
-
-model.fit(Y_sklearn, X=X_coords)
+model.fit(Y_sklearn)
 print(f"ELBO: {model.elbo_}")
 ```
