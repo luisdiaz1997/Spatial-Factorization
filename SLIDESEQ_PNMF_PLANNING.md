@@ -44,6 +44,8 @@ spatial_factorization --help
 
 **Goal:** Standardize data format (run once per dataset).
 
+**IMPORTANT:** Preprocessing is dataset-specific, NOT model-specific. The output directory should be named after the dataset (e.g., `outputs/slideseq`), not the model. Model-specific outputs are saved in subdirectories during later stages (e.g., `outputs/slideseq/pnmf/`).
+
 ```bash
 spatial_factorization preprocess -c configs/slideseq/pnmf.yaml
 ```
@@ -52,17 +54,34 @@ spatial_factorization preprocess -c configs/slideseq/pnmf.yaml
 ```
 Preprocessing dataset: slideseq
   Spots (N): 41783, Genes (D): 17702
-Preprocessed data saved to: outputs/slideseq_pnmf/preprocessed/
+Preprocessed data saved to: outputs/slideseq/preprocessed/
   X: (41783, 2)
   Y: (17702, 41783)
   C: 14 groups
 ```
 
 **Files created:**
-- `outputs/slideseq_pnmf/preprocessed/X.npy`
-- `outputs/slideseq_pnmf/preprocessed/Y.npy`
-- `outputs/slideseq_pnmf/preprocessed/C.npy`
-- `outputs/slideseq_pnmf/preprocessed/metadata.json`
+- `outputs/slideseq/preprocessed/X.npy`
+- `outputs/slideseq/preprocessed/Y.npy`
+- `outputs/slideseq/preprocessed/C.npy`
+- `outputs/slideseq/preprocessed/metadata.json`
+
+**Directory structure:**
+```
+outputs/
+└── slideseq/                    # Dataset-specific (shared by all models)
+    ├── preprocessed/            # Standardized data format (Stage 1)
+    │   ├── X.npy
+    │   ├── Y.npy
+    │   ├── C.npy
+    │   └── metadata.json
+    ├── pnmf/                    # Model-specific outputs (Stage 2+)
+    │   ├── model.pkl
+    │   └── training.json
+    └── lcgp/                    # Model-specific outputs (Stage 2+)
+        ├── model.pkl
+        └── training.json
+```
 
 **Deliverables:**
 - [x] `spatial_factorization/commands/preprocess.py`

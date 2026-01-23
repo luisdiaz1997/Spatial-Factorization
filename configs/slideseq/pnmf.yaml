@@ -1,4 +1,10 @@
 # SlideseqV2 with non-spatial PNMF (baseline model)
+#
+# IMPORTANT: The output.dir is dataset-specific, NOT model-specific.
+# - Preprocessing creates: outputs/slideseq/preprocessed/ (shared by all models)
+# - Training creates: outputs/slideseq/pnmf/ (model-specific results)
+# - Analysis creates: outputs/slideseq/pnmf/analysis/ (model-specific metrics)
+#
 # Run: spatial_factorization preprocess -c configs/slideseq/pnmf.yaml
 
 name: slideseq_pnmf
@@ -25,4 +31,5 @@ training:
   verbose: true
 
 output:
-  dir: outputs/slideseq_pnmf
+  # Preprocessing outputs are dataset-specific (not model-specific)
+  dir: outputs/slideseq
