@@ -16,7 +16,20 @@ This document contains the detailed implementation plan for:
 
 ## Environment Setup
 
-**IMPORTANT:** Use a dedicated conda environment to avoid dependency conflicts.
+**CRITICAL: Always activate the `factorization` conda environment before running commands!**
+
+```bash
+# Activate the factorization environment
+conda activate factorization
+
+# Verify you're in the right environment
+which python  # Should show: /Users/luisfcd/opt/miniconda3/envs/factorization/bin/python
+```
+
+**Current environment:** `factorization` (Python 3.10)
+**Location:** `/Users/luisfcd/opt/miniconda3/envs/factorization`
+
+### First-time Setup (if environment doesn't exist)
 
 ```bash
 # Create new conda environment named 'factorization'
@@ -40,8 +53,6 @@ pip install -e .
 pip install -e ../Probabilistic-NMF
 pip install -e ../GPzoo
 ```
-
-**Current environment:** `factorization` (Python 3.10)
 
 **Note:** The previous environment had squidpy/numba segfault issues. Using specific versions (scanpy==1.10.0, squidpy==1.5.0) with Python 3.10 should resolve this.
 
