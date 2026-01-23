@@ -99,29 +99,53 @@ outputs/
 **Goal:** Train PNMF model and save results.
 
 ```bash
-spatial_factorization train --config configs/slideseq/pnmf.yaml
+spatial_factorization train -c configs/slideseq/pnmf.yaml
 ```
 
 **Expected output:**
 ```
-Loading preprocessed data: 34000 spots, 1000 genes
-Training PNMF with 10 components...
-[Iteration 100] ELBO: -1234567.89
-[Iteration 200] ELBO: -1234000.00
+Loading preprocessed data from: outputs/slideseq/preprocessed/
+  Spots (N): 41783, Genes (D): 17702
+Training PNMF with 10 components (mode=expanded)...
+[Iteration 100/500] ELBO: -1234567.89
+[Iteration 200/500] ELBO: -1234000.00
 ...
 Training complete!
-  ELBO: -1230000.00
-  Time: 123.4s
-  Saved to: outputs/slideseq_pnmf/
+  Final ELBO:     -1230000.00
+  Training time:  123.4s
+  Converged:      True
+Model saved to: outputs/slideseq/pnmf/
 ```
 
 **Files created:**
-- `outputs/slideseq_pnmf/model.pth`
-- `outputs/slideseq_pnmf/elbo_history.csv`
-- `outputs/slideseq_pnmf/train_metadata.json`
+- `outputs/slideseq/pnmf/model.pkl` - Trained PNMF model (pickle format)
+- `outputs/slideseq/pnmf/training.json` - Training metadata (ELBO, time, config, etc.)
+
+**Training metadata format (`training.json`):**
+```json
+{
+  "n_components": 10,
+  "elbo": -1230000.00,
+  "training_time": 123.4,
+  "max_iter": 500,
+  "converged": true,
+  "timestamp": "2024-01-23T12:34:56",
+  "model_config": {
+    "mode": "expanded",
+    "loadings_mode": "projected",
+    "spatial": false
+  },
+  "data_info": {
+    "n_spots": 41783,
+    "n_genes": 17702,
+    "n_groups": 14
+  }
+}
+```
 
 **Deliverables:**
 - [ ] `spatial_factorization/commands/train.py`
+- [ ] `tests/test_train.py` - Test for verifying trained model outputs
 
 ---
 
