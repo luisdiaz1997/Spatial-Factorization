@@ -10,25 +10,27 @@ LOADERS = {
 }
 
 
-def load_dataset(config) -> SpatialData:
-    """Load a dataset based on configuration.
+def load_dataset(dataset: str, preprocessing: dict = None) -> SpatialData:
+    """Load a dataset by name.
 
     Parameters
     ----------
-    config : DatasetConfig
-        Dataset configuration with name and preprocessing parameters.
+    dataset : str
+        Dataset name (e.g., 'slideseq', 'tenxvisium').
+    preprocessing : dict, optional
+        Preprocessing parameters (spatial_scale, filter_mt, min_counts, min_cells).
 
     Returns
     -------
     SpatialData
         Loaded and preprocessed spatial data.
     """
-    if config.name not in LOADERS:
+    if dataset not in LOADERS:
         available = ", ".join(LOADERS.keys())
-        raise ValueError(f"Unknown dataset '{config.name}'. Available: {available}")
+        raise ValueError(f"Unknown dataset '{dataset}'. Available: {available}")
 
-    loader_cls = LOADERS[config.name]
-    return loader_cls().load(config)
+    loader_cls = LOADERS[dataset]
+    return loader_cls().load(preprocessing or {})
 
 
 __all__ = [

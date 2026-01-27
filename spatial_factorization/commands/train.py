@@ -4,7 +4,6 @@ import json
 import pickle
 import time
 from pathlib import Path
-from dataclasses import asdict
 
 import numpy as np
 import pandas as pd
@@ -29,8 +28,8 @@ def _save_model(model, config: Config, model_dir: Path) -> None:
         "components": model.components_,
         "hyperparameters": {
             "n_components": model.n_components,
-            "mode": config.model.mode,
-            "loadings_mode": config.model.loadings_mode,
+            "mode": config.model.get("mode", "expanded"),
+            "loadings_mode": config.model.get("loadings_mode", "projected"),
             "random_state": config.seed,
         },
     }, model_dir / "model.pth")
@@ -49,16 +48,12 @@ def _get_training_metadata(model, config: Config, data, train_time: float) -> di
         "n_components": model.n_components_,
         "elbo": float(model.elbo_),
         "training_time": train_time,
-        "max_iter": config.training.max_iter,
-        "converged": model.n_iter_ < config.training.max_iter,
+        "max_iter": config.training.get("max_iter", 10000),
+        "converged": model.n_iter_ < config.training.get("max_iter", 10000),
         "n_iterations": model.n_iter_,
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        "model_config": {
-            "mode": config.model.mode,
-            "loadings_mode": config.model.loadings_mode,
-            "spatial": config.model.spatial,
-        },
-        "training_config": asdict(config.training),
+        "model_config": config.model,
+        "training_config": config.training,
         "data_info": {
             "n_spots": data.n_spots,
             "n_genes": data.n_genes,
@@ -84,35 +79,35 @@ def run(config_path: str):
     np.random.seed(config.seed)
 
     # Load preprocessed data
-    print(f"Loading preprocessed data from: {config.output_dir}/preprocessed/")
-    data = load_preprocessed(config.output_dir)
+    output_dir = Path(config.output_dir)
+    print(f"Loading preprocessed data from: {output_dir}/preprocessed/")
+    data = load_preprocessed(output_dir)
     print(f"  Spots (N): {data.n_spots}, Genes (D): {data.n_genes}")
 
     # Build model (data.Y is already in N x D format)
-    print(f"Training PNMF with {config.model.n_components} components "
-          f"(mode={config.model.mode}, device={config.training.device})...")
+    n_components = config.model.get("n_components", 10)
+    mode = config.model.get("mode", "expanded")
+    device = config.training.get("device", "cpu")
+    print(f"Training PNMF with {n_components} components (mode={mode}, device={device})...")
 
-    model = PNMF(
-        n_components=config.model.n_components,
-        mode=config.model.mode,
-        loadings_mode=config.model.loadings_mode,
-        random_state=config.seed,
-        **config.training.to_pnmf_kwargs(),
-    )
+    model = PNMF(random_state=config.seed, **config.to_pnmf_kwargs())
 
     # Train
     t0 = time.perf_counter()
     elbo_history, model = model.fit(data.Y.numpy(), return_history=True)
     train_time = time.perf_counter() - t0
 
+    max_iter = config.training.get("max_iter", 10000)
     print("\nTraining complete!")
     print(f"  Final ELBO:     {model.elbo_:.2f}")
     print(f"  Training time:  {train_time:.1f}s")
-    print(f"  Converged:      {model.n_iter_ < config.training.max_iter}")
+    print(f"  Converged:      {model.n_iter_ < max_iter}")
 
     # Create model-specific output directory
-    model_name = "pnmf" if not config.model.spatial else config.model.gp_class.lower()
-    model_dir = config.output_dir / model_name
+    spatial = config.model.get("spatial", False)
+    prior = config.model.get("prior", "GaussianPrior")
+    model_name = prior.lower() if spatial else "pnmf"
+    model_dir = output_dir / model_name
     model_dir.mkdir(parents=True, exist_ok=True)
 
     # Save outputs

@@ -28,14 +28,14 @@ def run(config_path: str):
     # Load config
     config = Config.from_yaml(config_path)
 
-    print(f"Preprocessing dataset: {config.dataset.name}")
+    print(f"Preprocessing dataset: {config.dataset}")
 
     # Load raw data using dataset-specific loader
-    data = load_dataset(config.dataset)
+    data = load_dataset(config.dataset, config.preprocessing)
     print(f"  Spots (N): {data.n_spots}, Genes (D): {data.n_genes}")
 
     # Create output directory for preprocessed data
-    output_dir = config.output_dir / "preprocessed"
+    output_dir = Path(config.output_dir) / "preprocessed"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Save arrays in standardized format
@@ -69,13 +69,8 @@ def run(config_path: str):
         "gene_names": data.gene_names,
         "spot_names": data.spot_names,
         "group_names": group_names,
-        "dataset": config.dataset.name,
-        "preprocessing": {
-            "spatial_scale": config.dataset.spatial_scale,
-            "filter_mt": config.dataset.filter_mt,
-            "min_counts": config.dataset.min_counts,
-            "min_cells": config.dataset.min_cells,
-        },
+        "dataset": config.dataset,
+        "preprocessing": config.preprocessing,
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
 

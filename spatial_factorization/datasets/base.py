@@ -76,13 +76,13 @@ class DatasetLoader(ABC):
     """Abstract base class for dataset loaders."""
 
     @abstractmethod
-    def load(self, config) -> SpatialData:
+    def load(self, preprocessing: dict) -> SpatialData:
         """Load and preprocess a dataset.
 
         Parameters
         ----------
-        config : DatasetConfig
-            Configuration with preprocessing parameters.
+        preprocessing : dict
+            Preprocessing parameters (spatial_scale, filter_mt, min_counts, min_cells).
 
         Returns
         -------

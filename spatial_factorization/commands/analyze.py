@@ -99,14 +99,17 @@ def run(config_path: str):
         moran_i.csv    - Moran's I per factor
     """
     config = Config.from_yaml(config_path)
+    output_dir = Path(config.output_dir)
 
     # Determine model directory
-    model_name = "pnmf" if not config.model.spatial else config.model.gp_class.lower()
-    model_dir = config.output_dir / model_name
+    spatial = config.model.get("spatial", False)
+    prior = config.model.get("prior", "GaussianPrior")
+    model_name = prior.lower() if spatial else "pnmf"
+    model_dir = output_dir / model_name
 
     # Load preprocessed data
-    print(f"Loading preprocessed data from: {config.output_dir}/preprocessed/")
-    data = load_preprocessed(config.output_dir)
+    print(f"Loading preprocessed data from: {output_dir}/preprocessed/")
+    data = load_preprocessed(output_dir)
     print(f"  Spots (N): {data.n_spots}, Genes (D): {data.n_genes}")
 
     # Load trained model

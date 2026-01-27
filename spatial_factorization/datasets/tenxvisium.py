@@ -12,23 +12,34 @@ from .slideseq import rescale_spatial_coords
 class TenxVisiumLoader(DatasetLoader):
     """Loader for 10x Visium datasets from squidpy."""
 
-    def load(self, config) -> SpatialData:
+    # Default preprocessing parameters
+    DEFAULTS = {
+        "spatial_scale": 50.0,
+        "filter_mt": True,
+        "min_counts": 100,
+        "min_cells": 10,
+    }
+
+    def load(self, preprocessing: dict) -> SpatialData:
         """Load 10x Visium dataset.
 
         Parameters
         ----------
-        config : DatasetConfig
-            Configuration with:
-            - spatial_scale: float, coordinate scaling factor
-            - filter_mt: bool, whether to filter mitochondrial genes
-            - min_counts: int, minimum counts per cell
-            - min_cells: int, minimum cells per gene
+        preprocessing : dict
+            Preprocessing parameters:
+            - spatial_scale: float, coordinate scaling factor (default: 50.0)
+            - filter_mt: bool, whether to filter mitochondrial genes (default: True)
+            - min_counts: int, minimum counts per cell (default: 100)
+            - min_cells: int, minimum cells per gene (default: 10)
 
         Returns
         -------
         SpatialData
             Loaded dataset.
         """
+        # Merge with defaults
+        params = {**self.DEFAULTS, **preprocessing}
+
         try:
             import scanpy as sc
             import squidpy as sq
@@ -49,17 +60,17 @@ class TenxVisiumLoader(DatasetLoader):
         sc.pp.calculate_qc_metrics(adata, qc_vars=["mt"], inplace=True)
         if "pct_counts_mt" in adata.obs:
             adata = adata[adata.obs.pct_counts_mt < 20].copy()
-        sc.pp.filter_cells(adata, min_counts=config.min_counts)
-        sc.pp.filter_genes(adata, min_cells=config.min_cells)
+        sc.pp.filter_cells(adata, min_counts=params["min_counts"])
+        sc.pp.filter_genes(adata, min_cells=params["min_cells"])
 
         # Filter MT genes if requested
-        if config.filter_mt:
+        if params["filter_mt"]:
             gene_mask = ~adata.var["mt"].values
             adata = adata[:, gene_mask]
 
         # Extract spatial coordinates
         X_np = np.asarray(adata.obsm["spatial"], dtype=np.float32)
-        X_np = rescale_spatial_coords(X_np) * config.spatial_scale
+        X_np = rescale_spatial_coords(X_np) * params["spatial_scale"]
 
         # Extract count matrix (N x D format for PNMF)
         Y_matrix = adata.X
