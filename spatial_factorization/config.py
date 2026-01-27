@@ -113,10 +113,10 @@ class TrainingConfig:
         # Accept both x_batch/batch_size and y_batch/y_batch_size for compatibility
         # but normalize to x_batch/y_batch internally
         return cls(
-            max_iter=data.get("max_iter", 10000),
-            learning_rate=data.get("learning_rate", 0.01),
+            max_iter=int(data.get("max_iter", 10000)),
+            learning_rate=float(data.get("learning_rate", 0.01)),
             optimizer=data.get("optimizer", "Adam"),
-            tol=data.get("tol", 1e-4),
+            tol=float(data.get("tol", 1e-4)),
             verbose=data.get("verbose", True),
             device=data.get("device", "cpu"),
             x_batch=data.get("x_batch") or data.get("batch_size"),
