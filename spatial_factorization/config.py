@@ -116,13 +116,6 @@ class Config:
             output_dir=data.get("output_dir", data.get("output", {}).get("dir", "outputs")),
         )
 
-    @classmethod
-    def from_yaml(cls, path: str | Path) -> "Config":
-        """Load configuration from a YAML file."""
-        with open(path) as f:
-            data = yaml.safe_load(f)
-        return cls.from_dict(data)
-
     def to_dict(self) -> Dict[str, Any]:
         """Convert configuration to dictionary."""
         return {
@@ -134,6 +127,13 @@ class Config:
             "training": self.training,
             "output_dir": self.output_dir,
         }
+
+    @classmethod
+    def from_yaml(cls, path: str | Path) -> "Config":
+        """Load configuration from a YAML file."""
+        with open(path) as f:
+            data = yaml.safe_load(f)
+        return cls.from_dict(data)
 
     def save_yaml(self, path: str | Path) -> None:
         """Save configuration to a YAML file."""

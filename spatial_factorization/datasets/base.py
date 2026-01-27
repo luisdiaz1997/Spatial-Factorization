@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import List, Optional, Union
 
 import numpy as np
+from scipy import sparse
 import torch
 
 
@@ -116,8 +117,11 @@ def load_preprocessed(output_dir: Union[Path, str]) -> SpatialData:
 
     # Load arrays
     X = torch.from_numpy(np.load(prep_dir / "X.npy")).float()
-    Y = torch.from_numpy(np.load(prep_dir / "Y.npy")).float()
     C = torch.from_numpy(np.load(prep_dir / "C.npy")).long()
+
+    # Load Y (stored sparse, converted to dense for PNMF)
+    Y_sparse = sparse.load_npz(prep_dir / "Y.npz")
+    Y = torch.from_numpy(Y_sparse.toarray()).float()
 
     # Load metadata
     with open(prep_dir / "metadata.json") as f:
