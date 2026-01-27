@@ -3,6 +3,7 @@
 Computes:
 - Moran's I for spatial autocorrelation of each factor
 - Reconstruction error (relative Frobenius norm)
+- Poisson deviance (goodness-of-fit for count data)
 - Factor values for each spot
 
 Outputs:
@@ -61,6 +62,55 @@ def _compute_reconstruction_error(model, Y: np.ndarray) -> float:
     # Relative Frobenius norm
     error = np.linalg.norm(Y - Y_reconstructed, 'fro') / np.linalg.norm(Y, 'fro')
     return float(error)
+
+
+def _compute_poisson_deviance(model, Y: np.ndarray) -> dict:
+    """Compute Poisson deviance (KL divergence) for goodness-of-fit.
+
+    D(V_true || V_reconstruct) = sum_ij (V_ij * log(V_ij / mu_ij) - V_ij + mu_ij)
+
+    For V_ij=0, the V*log(V/mu) term is 0, leaving just mu_ij.
+
+    Args:
+        model: Fitted PNMF model
+        Y: Original data (N, D)
+
+    Returns:
+        Dictionary with deviance metrics:
+        - total: Total Poisson deviance
+        - mean: Mean deviance per observation
+        - mean_per_gene: Mean deviance per gene (averaged over spots)
+    """
+    # Get reconstruction
+    factors = _extract_factors(model)  # (N, L)
+    mu = factors @ model.components_  # (N, L) @ (L, D) = (N, D)
+
+    # Ensure mu > 0 for numerical stability
+    mu = np.maximum(mu, 1e-10)
+
+    # Compute deviance: sum(y * log(y/mu) - y + mu)
+    # For y=0: term is 0 - 0 + mu = mu
+    # For y>0: term is y*log(y/mu) - y + mu
+    deviance = np.zeros_like(Y, dtype=np.float64)
+
+    # Where y > 0
+    mask = Y > 0
+    deviance[mask] = (
+        Y[mask] * np.log(Y[mask] / mu[mask]) - Y[mask] + mu[mask]
+    )
+
+    # Where y = 0
+    deviance[~mask] = mu[~mask]
+
+    total_deviance = 2*float(np.sum(deviance))
+    n_obs = Y.size
+    n_genes = Y.shape[1]
+
+    return {
+        "total": total_deviance,
+        "mean": total_deviance / n_obs,
+        "mean_per_gene": total_deviance / n_genes,
+    }
 
 
 def _compute_moran_i(factors: np.ndarray, coords: np.ndarray) -> tuple:
@@ -132,6 +182,11 @@ def run(config_path: str):
     recon_error = _compute_reconstruction_error(model, data.Y.numpy())
     print(f"  Reconstruction error: {recon_error:.4f}")
 
+    # Compute Poisson deviance
+    print("Computing Poisson deviance...")
+    poisson_dev = _compute_poisson_deviance(model, data.Y.numpy())
+    print(f"  Poisson deviance (mean): {poisson_dev['mean']:.4f}")
+
     # Save factors
     np.save(model_dir / "factors.npy", factors)
 
@@ -145,6 +200,7 @@ def run(config_path: str):
     # Build metrics dict
     metrics = {
         "reconstruction_error": recon_error,
+        "poisson_deviance": poisson_dev,
         "moran_i": {
             "values": moran_values.tolist(),
             "sorted_indices": moran_idx.tolist(),
@@ -161,7 +217,8 @@ def run(config_path: str):
         json.dump(metrics, f, indent=2)
 
     print("\nAnalysis complete!")
-    print(f"  Moran's I (mean): {metrics['moran_i']['mean']:.4f}")
-    print(f"  Moran's I (max):  {metrics['moran_i']['max']:.4f}")
-    print(f"  Reconstruction:   {recon_error:.4f}")
+    print(f"  Moran's I (mean):      {metrics['moran_i']['mean']:.4f}")
+    print(f"  Moran's I (max):       {metrics['moran_i']['max']:.4f}")
+    print(f"  Reconstruction error:  {recon_error:.4f}")
+    print(f"  Poisson deviance:      {poisson_dev['mean']:.4f}")
     print(f"  Saved to: {model_dir}/")
