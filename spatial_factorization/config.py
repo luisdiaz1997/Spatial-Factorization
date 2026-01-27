@@ -101,19 +101,44 @@ class TrainingConfig:
     optimizer: str = "Adam"
     tol: float = 1e-4
     verbose: bool = True
+    device: str = "cpu"  # 'cpu', 'gpu' (auto-selects cuda/mps), 'cuda', 'mps'
+
+    # Batch training (mini-batch for large datasets)
+    x_batch: Optional[int] = None  # Mini-batch size for samples (N dimension)
+    y_batch: Optional[int] = None  # Mini-batch size for features (D dimension)
+    shuffle: bool = True
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "TrainingConfig":
-        return cls(**data)
+        # Accept both x_batch/batch_size and y_batch/y_batch_size for compatibility
+        # but normalize to x_batch/y_batch internally
+        return cls(
+            max_iter=data.get("max_iter", 10000),
+            learning_rate=data.get("learning_rate", 0.01),
+            optimizer=data.get("optimizer", "Adam"),
+            tol=data.get("tol", 1e-4),
+            verbose=data.get("verbose", True),
+            device=data.get("device", "cpu"),
+            x_batch=data.get("x_batch") or data.get("batch_size"),
+            y_batch=data.get("y_batch") or data.get("y_batch_size"),
+            shuffle=data.get("shuffle", True),
+        )
 
     def to_pnmf_kwargs(self) -> Dict[str, Any]:
-        """Convert to kwargs for PNMF constructor."""
+        """Convert to kwargs for PNMF constructor.
+
+        Maps our naming convention (x_batch/y_batch) to PNMF's (batch_size/y_batch_size).
+        """
         return {
             "max_iter": self.max_iter,
             "learning_rate": self.learning_rate,
             "optimizer": self.optimizer,
             "tol": self.tol,
             "verbose": self.verbose,
+            "device": "auto" if self.device == "gpu" else self.device,
+            "batch_size": self.x_batch,
+            "y_batch_size": self.y_batch,
+            "shuffle": self.shuffle,
         }
 
 

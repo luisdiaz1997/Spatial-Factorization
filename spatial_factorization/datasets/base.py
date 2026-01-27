@@ -21,8 +21,8 @@ class SpatialData:
     X : torch.Tensor
         Spatial coordinates, shape (N, 2) where N is number of spots/cells.
     Y : torch.Tensor
-        Count matrix, shape (D, N) where D is number of genes.
-        Note: This is genes x spots (transposed from typical scanpy format).
+        Count matrix, shape (N, D) where D is number of genes.
+        This is the format expected by PNMF (sklearn API).
     groups : torch.Tensor, optional
         Group labels for MGGP models, shape (N,).
     n_groups : int
@@ -36,7 +36,7 @@ class SpatialData:
     """
 
     X: torch.Tensor  # (N, 2) spatial coordinates
-    Y: torch.Tensor  # (D, N) count matrix (genes x spots)
+    Y: torch.Tensor  # (N, D) count matrix (spots x genes) - ready for PNMF
     groups: Optional[torch.Tensor] = None  # (N,) group labels
     n_groups: int = 0
     gene_names: Optional[List[str]] = field(default=None)
@@ -51,7 +51,7 @@ class SpatialData:
     @property
     def n_genes(self) -> int:
         """Number of genes."""
-        return self.Y.shape[0]
+        return self.Y.shape[1]
 
     def to(self, device: torch.device) -> "SpatialData":
         """Move all tensors to specified device."""

@@ -47,16 +47,15 @@ def load_and_verify_preprocessed(output_dir: Path, dataset_name: str):
     with open(prep_dir / "metadata.json") as f:
         metadata = json.load(f)
 
-    # Verify shapes
+    # Verify shapes: X is (N, 2), Y is (N, D), C is (N,)
     assert X.ndim == 2 and X.shape[1] == 2, f"{dataset_name}: X should be (N, 2)"
     assert Y.ndim == 2, f"{dataset_name}: Y should be 2D"
     assert C.ndim == 1, f"{dataset_name}: C should be 1D"
 
     N = X.shape[0]
-    D = Y.shape[0]
+    D = Y.shape[1]  # Y is (N, D) - spots x genes
 
-    assert X.shape[0] == N, f"{dataset_name}: X shape mismatch"
-    assert Y.shape[1] == N, f"{dataset_name}: Y shape mismatch (spots don't match X)"
+    assert Y.shape[0] == N, f"{dataset_name}: Y shape mismatch (spots don't match X)"
     assert C.shape[0] == N, f"{dataset_name}: C shape mismatch (doesn't match X)"
 
     # Verify metadata fields
@@ -135,7 +134,7 @@ def test_load_preprocessed_function():
 
     # Verify properties
     assert data.n_spots == data.X.shape[0], "n_spots mismatch"
-    assert data.n_genes == data.Y.shape[0], "n_genes mismatch"
+    assert data.n_genes == data.Y.shape[1], "n_genes mismatch (Y is N x D)"
 
     # Verify names are populated
     assert data.gene_names is not None, "gene_names should be populated"

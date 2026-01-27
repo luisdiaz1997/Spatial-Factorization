@@ -94,7 +94,7 @@ outputs/
 
 ---
 
-### Stage 2: Train Command `⬜ NOT DONE`
+### Stage 2: Train Command `🟩 DONE`
 
 **Goal:** Train PNMF model and save results.
 

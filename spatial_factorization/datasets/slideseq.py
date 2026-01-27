@@ -67,11 +67,11 @@ class SlideseqLoader(DatasetLoader):
         X_np = np.asarray(adata.obsm["spatial"], dtype=np.float32)
         X_np = rescale_spatial_coords(X_np) * config.spatial_scale
 
-        # Extract count matrix (transpose to D x N)
+        # Extract count matrix (N x D format for PNMF)
         Y_matrix = adata.X
         if hasattr(Y_matrix, "toarray"):
             Y_matrix = Y_matrix.toarray()
-        Y_np = np.asarray(Y_matrix, dtype=np.float32).T  # (D, N)
+        Y_np = np.asarray(Y_matrix, dtype=np.float32)  # (N, D)
 
         # Extract groups if available (for MGGP)
         groups_t = None

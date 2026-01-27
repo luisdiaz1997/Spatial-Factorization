@@ -2,7 +2,7 @@
 
 Standardizes data into common format:
 - X.npy: (N, 2) spatial coordinates
-- Y.npy: (D, N) count matrix (genes x spots)
+- Y.npy: (N, D) count matrix (spots x genes) - ready for PNMF
 - C.npy: (N,) group codes (integers 0..G-1)
 - metadata.json: gene names, spot names, group names, preprocessing params
 """
@@ -40,7 +40,7 @@ def run(config_path: str):
 
     # Save arrays in standardized format
     np.save(output_dir / "X.npy", data.X.numpy())  # (N, 2)
-    np.save(output_dir / "Y.npy", data.Y.numpy())  # (D, N)
+    np.save(output_dir / "Y.npy", data.Y.numpy())  # (N, D) - ready for PNMF
 
     # Save group codes (C)
     if data.groups is not None:

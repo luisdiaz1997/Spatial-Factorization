@@ -1,11 +1,4 @@
 # SlideseqV2 with non-spatial PNMF (baseline model)
-#
-# IMPORTANT: The output.dir is dataset-specific, NOT model-specific.
-# - Preprocessing creates: outputs/slideseq/preprocessed/ (shared by all models)
-# - Training creates: outputs/slideseq/pnmf/ (model-specific results)
-# - Analysis creates: outputs/slideseq/pnmf/analysis/ (model-specific metrics)
-#
-# Run: spatial_factorization preprocess -c configs/slideseq/pnmf.yaml
 
 name: slideseq_pnmf
 seed: 67
@@ -28,8 +21,12 @@ training:
   learning_rate: 0.01
   optimizer: Adam
   tol: 1e-4
-  verbose: true
+  verbose: false
+  device: gpu           # 'cpu', 'gpu', 'cuda', or 'mps'
+
+  x_batch: 8000         # Samples per batch (N dimension)
+  y_batch: 2000         # Features per batch (D dimension)
+  shuffle: true
 
 output:
-  # Preprocessing outputs are dataset-specific (not model-specific)
-  dir: outputs/slideseq
+  dir: outputs/slideseq  # Dataset-specific; model outputs go to subdirs (e.g. pnmf/)
