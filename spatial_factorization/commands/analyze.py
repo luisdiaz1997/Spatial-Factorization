@@ -5,10 +5,13 @@ Computes:
 - Reconstruction error (relative Frobenius norm)
 - Poisson deviance (goodness-of-fit for count data)
 - Factor values for each spot
+- Group-specific loadings (loadings_group for each group g)
 
 Outputs:
 - metrics.json: All computed metrics
 - factors.npy: Factor values (N, L)
+- loadings.npy: Global loadings (D, L)
+- loadings_group_{g}.npy: Group-specific loadings (D, L)
 - moran_i.csv: Moran's I per factor with sort index
 """
 
@@ -20,6 +23,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from PNMF.transforms import get_factors, log_factors, transform_W
+
 from ..config import Config
 from ..datasets.base import load_preprocessed
 
@@ -28,19 +33,6 @@ def _load_model(model_dir: Path):
     """Load trained PNMF model from pickle."""
     with open(model_dir / "model.pkl", "rb") as f:
         return pickle.load(f)
-
-
-def _extract_factors(model) -> np.ndarray:
-    """Extract factor values from fitted PNMF model.
-
-    Returns:
-        factors: (N, L) array of factor values (exp of latent mean)
-    """
-    # PNMF stores qF prior with mean shape (L, N)
-    # We want (N, L) for compatibility with dims_autocorr
-    latent_mean = model._prior.mean.detach().cpu().numpy()  # (L, N)
-    factors = np.exp(latent_mean).T  # (N, L)
-    return factors
 
 
 def _compute_reconstruction_error(model, Y: np.ndarray) -> float:
@@ -54,10 +46,9 @@ def _compute_reconstruction_error(model, Y: np.ndarray) -> float:
         Relative error: ||Y - Y_hat||_F / ||Y||_F
     """
     # Get factors and loadings
-    factors = _extract_factors(model)  # (N, L)
-    W = model.components_.T  # (L, D) -> transpose to (D, L) then back? No, W is (L, D)
-    # Actually components_ is (L, D), so we need (N, L) @ (L, D) = (N, D)
-    Y_reconstructed = factors @ model.components_  # (N, L) @ (L, D) = (N, D)
+    F = get_factors(model, use_mgf=False)  # (N, L) - exp(μ)
+    # components_ is (L, D), so we need (N, L) @ (L, D) = (N, D)
+    Y_reconstructed = F @ model.components_  # (N, L) @ (L, D) = (N, D)
 
     # Relative Frobenius norm
     error = np.linalg.norm(Y - Y_reconstructed, 'fro') / np.linalg.norm(Y, 'fro')
@@ -82,7 +73,7 @@ def _compute_poisson_deviance(model, Y: np.ndarray) -> dict:
         - mean_per_gene: Mean deviance per gene (averaged over spots)
     """
     # Get reconstruction
-    factors = _extract_factors(model)  # (N, L)
+    factors = get_factors(model, use_mgf=False)  # (N, L) - exp(μ)
     mu = factors @ model.components_  # (N, L) @ (L, D) = (N, D)
 
     # Ensure mu > 0 for numerical stability
@@ -111,6 +102,69 @@ def _compute_poisson_deviance(model, Y: np.ndarray) -> dict:
         "mean": total_deviance / n_obs,
         "mean_per_gene": total_deviance / n_genes,
     }
+
+
+def _compute_group_loadings(
+    model, Y: np.ndarray, groups: np.ndarray, max_iter: int = 1000, verbose: bool = False
+) -> dict:
+    """Compute group-specific loadings using PNMF's transform_W.
+
+    Given the fitted model with factors F = mu (log-space), for each group g:
+    - Extract Y_group = Y[groups == g]  (group_size, D)
+    - Extract factors_group = mu[:, groups == g].T  (group_size, L) - log-space factors
+    - Use transform_W to learn loadings_group such that Y_group ≈ exp(factors_group) @ loadings_group.T
+
+    Args:
+        model: Fitted PNMF model
+        Y: Count matrix (N, D)
+        groups: Group labels (N,)
+        max_iter: Maximum iterations for transform_W optimization
+        verbose: Whether to show progress
+
+    Returns:
+        Dictionary with:
+        - loadings: dict mapping group_id -> loadings_group array (D, L)
+        - reconstruction_error: dict mapping group_id -> relative error
+    """
+    # Get log-space latent factors (N, L)
+    factors_log = log_factors(model)  # (N, L)
+    L = factors_log.shape[1]
+    N = factors_log.shape[0]
+
+    # Get global loadings for fallback
+    loadings_global = model.components_.T  # (D, L)
+
+    unique_groups = np.unique(groups)
+    loadings = {}
+    recon_errors = {}
+
+    for g in unique_groups:
+        mask = groups == g
+        Y_group = Y[mask]  # (group_size, D)
+        factors_group = factors_log[mask]  # (group_size, L) - log-space factors
+        group_size = Y_group.shape[0]
+
+        if group_size < L:
+            # Not enough samples to estimate loadings
+            loadings[int(g)] = loadings_global.copy()
+            recon_errors[int(g)] = float("nan")
+            continue
+
+        # Use PNMF's transform_W to learn group-specific loadings
+        loadings_group = transform_W(
+            Y_group, factors_group,
+            max_iter=max_iter,
+            verbose=verbose,
+        )
+        loadings[int(g)] = loadings_group
+
+        # Compute reconstruction error for this group
+        factors_group_exp = np.exp(factors_group)  # (group_size, L)
+        Y_group_hat = factors_group_exp @ loadings_group.T  # (group_size, L) @ (L, D) = (group_size, D)
+        error = np.linalg.norm(Y_group - Y_group_hat, "fro") / np.linalg.norm(Y_group, "fro")
+        recon_errors[int(g)] = float(error)
+
+    return {"loadings": loadings, "reconstruction_error": recon_errors}
 
 
 def _compute_moran_i(factors: np.ndarray, coords: np.ndarray) -> tuple:
@@ -144,9 +198,11 @@ def run(config_path: str):
     """Analyze a trained PNMF model.
 
     Output files (outputs/{dataset}/{model}/):
-        metrics.json   - All computed metrics
-        factors.npy    - Factor values (N, L)
-        moran_i.csv    - Moran's I per factor
+        metrics.json             - All computed metrics
+        factors.npy              - Factor values (N, L)
+        loadings.npy             - Global loadings (D, L)
+        loadings_group_{g}.npy   - Group-specific loadings (D, L)
+        moran_i.csv              - Moran's I per factor
     """
     config = Config.from_yaml(config_path)
     output_dir = Path(config.output_dir)
@@ -168,7 +224,7 @@ def run(config_path: str):
 
     # Extract factors
     print("Extracting factors...")
-    factors = _extract_factors(model)
+    factors = get_factors(model, use_mgf=False)  # (N, L) - exp(μ)
     print(f"  Factors shape: {factors.shape}")
 
     # Compute Moran's I for spatial autocorrelation
@@ -187,8 +243,28 @@ def run(config_path: str):
     poisson_dev = _compute_poisson_deviance(model, data.Y.numpy())
     print(f"  Poisson deviance (mean): {poisson_dev['mean']:.4f}")
 
+    # Compute group-specific loadings if groups exist
+    group_loadings_result = None
+    if data.groups is not None and data.n_groups > 1:
+        print(f"\nComputing group-specific loadings for {data.n_groups} groups...")
+        group_loadings_result = _compute_group_loadings(
+            model, data.Y.numpy(), data.groups.numpy(), verbose=True
+        )
+        print(f"  Group reconstruction errors:")
+        for g, err in group_loadings_result["reconstruction_error"].items():
+            group_name = data.group_names[g] if data.group_names else f"Group {g}"
+            print(f"    {group_name}: {err:.4f}")
+
     # Save factors
     np.save(model_dir / "factors.npy", factors)
+
+    # Save global loadings
+    np.save(model_dir / "loadings.npy", model.components_.T)  # (D, L)
+
+    # Save group-specific loadings
+    if group_loadings_result is not None:
+        for g, loadings_group in group_loadings_result["loadings"].items():
+            np.save(model_dir / f"loadings_group_{g}.npy", loadings_group)
 
     # Save Moran's I results
     moran_df = pd.DataFrame({
@@ -212,6 +288,14 @@ def run(config_path: str):
         "n_spots": factors.shape[0],
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
+
+    # Add group-specific metrics if available
+    if group_loadings_result is not None:
+        metrics["group_loadings"] = {
+            "n_groups": data.n_groups,
+            "group_names": data.group_names,
+            "reconstruction_errors": group_loadings_result["reconstruction_error"],
+        }
 
     with open(model_dir / "metrics.json", "w") as f:
         json.dump(metrics, f, indent=2)
