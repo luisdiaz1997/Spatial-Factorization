@@ -126,10 +126,9 @@ def _compute_group_loadings(
         - loadings: dict mapping group_id -> loadings_group array (D, L)
         - reconstruction_error: dict mapping group_id -> relative error
     """
-    # Get log-space latent factors (N, L)
-    factors_log = log_factors(model)  # (N, L)
-    L = factors_log.shape[1]
-    N = factors_log.shape[0]
+    # Get exp-space latent factors (N, L)
+    F = get_factors(model, use_mgf=False)  # (N, L) - exp(μ)
+    L = F.shape[1]
 
     # Get global loadings for fallback
     loadings_global = model.components_.T  # (D, L)
@@ -141,7 +140,7 @@ def _compute_group_loadings(
     for g in unique_groups:
         mask = groups == g
         Y_group = Y[mask]  # (group_size, D)
-        factors_group = factors_log[mask]  # (group_size, L) - log-space factors
+        F_group = F[mask]  # (group_size, L) - exp-space factors
         group_size = Y_group.shape[0]
 
         if group_size < L:
@@ -152,15 +151,14 @@ def _compute_group_loadings(
 
         # Use PNMF's transform_W to learn group-specific loadings
         loadings_group = transform_W(
-            Y_group, factors_group,
+            Y_group, F_group,
             max_iter=max_iter,
             verbose=verbose,
         )
         loadings[int(g)] = loadings_group
 
         # Compute reconstruction error for this group
-        factors_group_exp = np.exp(factors_group)  # (group_size, L)
-        Y_group_hat = factors_group_exp @ loadings_group.T  # (group_size, L) @ (L, D) = (group_size, D)
+        Y_group_hat = F_group @ loadings_group.T  # (group_size, L) @ (L, D) = (group_size, D)
         error = np.linalg.norm(Y_group - Y_group_hat, "fro") / np.linalg.norm(Y_group, "fro")
         recon_errors[int(g)] = float(error)
 
