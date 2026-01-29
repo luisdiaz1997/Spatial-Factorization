@@ -2,9 +2,10 @@
 
 name: slideseq_pnmf
 seed: 67
+dataset: slideseq
+output_dir: outputs/slideseq
 
-dataset:
-  name: slideseq
+preprocessing:
   spatial_scale: 50.0
   filter_mt: true
   min_counts: 100
@@ -13,20 +14,17 @@ dataset:
 model:
   n_components: 10
   spatial: false
+  prior: GaussianPrior
   mode: expanded
   loadings_mode: projected
 
 training:
-  max_iter: 500
+  max_iter: 10000
   learning_rate: 0.01
   optimizer: Adam
-  tol: 1e-4
+  tol: 0.0001
   verbose: false
-  device: gpu           # 'cpu', 'gpu', 'cuda', or 'mps'
-
-  x_batch: 8000         # Samples per batch (N dimension)
-  y_batch: 2000         # Features per batch (D dimension)
+  device: gpu
+  batch_size: 8000
+  y_batch_size: 2000
   shuffle: true
-
-output:
-  dir: outputs/slideseq  # Dataset-specific; model outputs go to subdirs (e.g. pnmf/)

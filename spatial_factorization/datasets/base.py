@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import List, Optional, Union
 
 import numpy as np
+from scipy import sparse
 import torch
 
 
@@ -76,13 +77,13 @@ class DatasetLoader(ABC):
     """Abstract base class for dataset loaders."""
 
     @abstractmethod
-    def load(self, config) -> SpatialData:
+    def load(self, preprocessing: dict) -> SpatialData:
         """Load and preprocess a dataset.
 
         Parameters
         ----------
-        config : DatasetConfig
-            Configuration with preprocessing parameters.
+        preprocessing : dict
+            Preprocessing parameters (spatial_scale, filter_mt, min_counts, min_cells).
 
         Returns
         -------
@@ -116,8 +117,11 @@ def load_preprocessed(output_dir: Union[Path, str]) -> SpatialData:
 
     # Load arrays
     X = torch.from_numpy(np.load(prep_dir / "X.npy")).float()
-    Y = torch.from_numpy(np.load(prep_dir / "Y.npy")).float()
     C = torch.from_numpy(np.load(prep_dir / "C.npy")).long()
+
+    # Load Y (stored sparse, converted to dense for PNMF)
+    Y_sparse = sparse.load_npz(prep_dir / "Y.npz")
+    Y = torch.from_numpy(Y_sparse.toarray()).float()
 
     # Load metadata
     with open(prep_dir / "metadata.json") as f:
