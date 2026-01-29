@@ -19,12 +19,12 @@ model:
   loadings_mode: projected
 
 training:
-  max_iter: 10000
-  learning_rate: 0.01
+  max_iter: 5000
+  learning_rate: 0.001
   optimizer: Adam
   tol: 0.0001
   verbose: false
   device: gpu
-  batch_size: 8000
+  batch_size: 10000
   y_batch_size: 2000
   shuffle: true

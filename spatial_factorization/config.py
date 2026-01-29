@@ -88,9 +88,9 @@ class Config:
 
         # Training params
         kwargs["max_iter"] = self.training.get("max_iter", 10000)
-        kwargs["learning_rate"] = self.training.get("learning_rate", 0.01)
+        kwargs["learning_rate"] = float(self.training.get("learning_rate", 0.01))
         kwargs["optimizer"] = self.training.get("optimizer", "Adam")
-        kwargs["tol"] = self.training.get("tol", 1e-4)
+        kwargs["tol"] = float(self.training.get("tol", 1e-4))
         kwargs["verbose"] = self.training.get("verbose", False)
 
         # Device: map 'gpu' to 'auto'
