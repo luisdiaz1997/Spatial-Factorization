@@ -6,6 +6,7 @@ Computes:
 - Poisson deviance (goodness-of-fit for count data)
 - Factor values for each spot
 - Group-specific loadings (loadings_group for each group g)
+- Relative gene enrichment per factor per cell-type (group vs global loadings)
 
 Outputs:
 - metrics.json: All computed metrics
@@ -13,6 +14,7 @@ Outputs:
 - loadings.npy: Global loadings (D, L)
 - loadings_group_{g}.npy: Group-specific loadings (D, L)
 - moran_i.csv: Moran's I per factor with sort index
+- gene_enrichment.json: Relative enrichment per factor per group
 """
 
 import json
@@ -23,7 +25,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from PNMF.transforms import get_factors, log_factors, transform_W
+from PNMF.transforms import get_factors, log_factors, transform_W, factor_uncertainty
 
 from ..config import Config
 from ..datasets.base import load_preprocessed
@@ -165,6 +167,105 @@ def _compute_group_loadings(
     return {"loadings": loadings, "reconstruction_error": recon_errors}
 
 
+def _normalize_loadings(loadings: np.ndarray) -> np.ndarray:
+    """Normalize loadings per factor to sum to 1 (like softmax over genes).
+
+    This converts loadings to relative proportions, allowing comparison
+    between global and group-specific loadings that have different scales.
+
+    Args:
+        loadings: (D, L) loadings matrix
+
+    Returns:
+        Normalized loadings where each column sums to 1
+    """
+    eps = 1e-10
+    loadings_pos = np.maximum(loadings, eps)
+    return loadings_pos / loadings_pos.sum(axis=0, keepdims=True)
+
+
+def _compute_gene_enrichment(
+    global_loadings: np.ndarray,
+    group_loadings: dict,
+    gene_names: list,
+    group_names: list,
+) -> dict:
+    """Compute relative gene enrichment per factor by cell-type.
+
+    For each factor and group, computes relative enrichment by:
+    1. Normalizing loadings per factor (so they sum to 1 across genes)
+    2. Computing log-fold change: log2(group_normalized / global_normalized)
+
+    This normalization is critical because group-specific loadings are fit
+    independently and have different scales than global loadings.
+
+    Interpretation:
+    - Positive LFC → gene has higher relative weight in this cell type
+    - Negative LFC → gene has lower relative weight in this cell type
+
+    Args:
+        global_loadings: (D, L) global loadings
+        group_loadings: dict mapping group_id -> (D, L) loadings
+        gene_names: List of gene names
+        group_names: List of group names
+
+    Returns:
+        Dictionary with enrichment results
+    """
+    D, L = global_loadings.shape
+    gene_names = np.array(gene_names)
+
+    # Normalize global loadings per factor
+    global_norm = _normalize_loadings(global_loadings)
+
+    eps = 1e-10
+
+    results = {
+        "n_factors": L,
+        "n_groups": len(group_loadings),
+        "group_names": group_names,
+        "factors": {}
+    }
+
+    for factor_idx in range(L):
+        global_loading = global_norm[:, factor_idx]
+
+        factor_results = {
+            "groups": {}
+        }
+
+        for group_id, group_loading_matrix in group_loadings.items():
+            # Normalize group loadings per factor
+            group_norm = _normalize_loadings(group_loading_matrix)
+            group_loading = group_norm[:, factor_idx]
+
+            # Log-fold change on normalized loadings (relative enrichment)
+            lfc = np.log2((group_loading + eps) / (global_loading + eps))
+
+            # Get top enriched (positive LFC) and depleted (negative LFC) genes
+            top_enriched_idx = np.argsort(lfc)[-10:][::-1]
+            top_depleted_idx = np.argsort(lfc)[:10]
+
+            group_name = group_names[group_id] if group_id < len(group_names) else f"Group {group_id}"
+
+            factor_results["groups"][group_name] = {
+                "mean_lfc": float(np.mean(lfc)),
+                "std_lfc": float(np.std(lfc)),
+                "top_enriched": [
+                    {"gene": gene_names[idx], "lfc": float(lfc[idx])}
+                    for idx in top_enriched_idx
+                ],
+                "top_depleted": [
+                    {"gene": gene_names[idx], "lfc": float(lfc[idx])}
+                    for idx in top_depleted_idx
+                ],
+            }
+
+        results["factors"][f"factor_{factor_idx}"] = factor_results
+
+    return results
+
+
 def _compute_moran_i(factors: np.ndarray, coords: np.ndarray) -> tuple:
     """Compute Moran's I for each factor using squidpy.
 
@@ -201,6 +302,7 @@ def run(config_path: str):
         loadings.npy             - Global loadings (D, L)
         loadings_group_{g}.npy   - Group-specific loadings (D, L)
         moran_i.csv              - Moran's I per factor
+        gene_enrichment.json     - Relative enrichment per factor per group
     """
     config = Config.from_yaml(config_path)
     output_dir = Path(config.output_dir)
@@ -256,13 +358,35 @@ def run(config_path: str):
     # Save factors
     np.save(model_dir / "factors.npy", factors)
 
+    # Save factor uncertainty (scales) - represents uncertainty in latent factors
+    print("Extracting factor uncertainty (scales)...")
+    scales = factor_uncertainty(model, return_variance=False)  # (N, L) - standard deviation
+    np.save(model_dir / "scales.npy", scales)
+    print(f"  Scales shape: {scales.shape}, mean: {scales.mean():.4f}")
+
     # Save global loadings
     np.save(model_dir / "loadings.npy", model.components_.T)  # (D, L)
 
-    # Save group-specific loadings
+    # Save group-specific loadings and compute gene enrichment
+    gene_enrichment = None
     if group_loadings_result is not None:
         for g, loadings_group in group_loadings_result["loadings"].items():
             np.save(model_dir / f"loadings_group_{g}.npy", loadings_group)
+
+        # Compute relative gene enrichment (group vs global loadings)
+        print("\nComputing relative gene enrichment...")
+        global_loadings = model.components_.T  # (D, L)
+        gene_enrichment = _compute_gene_enrichment(
+            global_loadings,
+            group_loadings_result["loadings"],
+            data.gene_names,
+            data.group_names or [f"Group {g}" for g in range(data.n_groups)],
+        )
+
+        # Save enrichment results
+        with open(model_dir / "gene_enrichment.json", "w") as f:
+            json.dump(gene_enrichment, f, indent=2)
+        print(f"  Saved gene enrichment for {gene_enrichment['n_factors']} factors x {gene_enrichment['n_groups']} groups")
 
     # Save Moran's I results
     moran_df = pd.DataFrame({
