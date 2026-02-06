@@ -15,14 +15,14 @@ model:
   n_components: 10
   spatial: false
   prior: GaussianPrior
-  mode: expanded
-  loadings_mode: projected
+  mode: lower-bound
+  loadings_mode: multiplicative
 
 training:
-  max_iter: 5000
-  learning_rate: 0.001
+  max_iter: 2000
+  learning_rate: 1e-1
   optimizer: Adam
-  tol: 0.0001
+  tol: 1e-4
   verbose: false
   device: gpu
   batch_size: 10000

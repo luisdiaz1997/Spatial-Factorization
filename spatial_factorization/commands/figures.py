@@ -2,6 +2,7 @@
 
 Generates:
 - factors_spatial.png: Spatial factor visualization (sorted by Moran's I)
+- scales_spatial.png: Spatial factor uncertainty visualization (sigma values)
 - elbo_curve.png: Training ELBO convergence
 - top_genes.png: Top genes per factor by loading magnitude
 - factors_with_genes.png: Factors alongside top gene expression (like GPzoo notebooks)
@@ -34,6 +35,11 @@ def _load_analysis_results(model_dir: Path) -> dict:
     factors_path = model_dir / "factors.npy"
     if factors_path.exists():
         results["factors"] = np.load(factors_path)  # (N, L)
+
+    # Load scales (factor uncertainty)
+    scales_path = model_dir / "scales.npy"
+    if scales_path.exists():
+        results["scales"] = np.load(scales_path)  # (N, L)
 
     # Load global loadings
     loadings_path = model_dir / "loadings.npy"
@@ -112,15 +118,16 @@ def plot_factors_spatial(
             moran_values = moran_values  # Already sorted
 
     nrows = int(np.ceil(L / ncols))
+    # Make figure wider to accommodate colorbar
     fig, axes = plt.subplots(
         nrows, ncols,
-        figsize=(figsize_per_factor * ncols, figsize_per_factor * nrows),
+        figsize=(figsize_per_factor * ncols + 1.0, figsize_per_factor * nrows),
         squeeze=False
     )
 
     # Global color scale
-    vmin = np.percentile(factors, 2)
-    vmax = np.percentile(factors, 98)
+    vmin = np.percentile(factors, 2.5)
+    vmax = np.percentile(factors, 97.5)
 
     for i in range(L):
         row, col = divmod(i, ncols)
@@ -149,12 +156,102 @@ def plot_factors_spatial(
         row, col = divmod(i, ncols)
         axes[row, col].set_visible(False)
 
-    fig.tight_layout()
+    # Add colorbar
+    fig.subplots_adjust(right=0.92)
+    cbar_ax = fig.add_axes([0.94, 0.15, 0.02, 0.7])
+    fig.colorbar(sc, cax=cbar_ax, label="Factor value")
+
+    return fig
+
+
+def plot_scales_spatial(
+    scales: np.ndarray,
+    coords: np.ndarray,
+    moran_idx: Optional[np.ndarray] = None,
+    moran_values: Optional[np.ndarray] = None,
+    figsize_per_factor: float = 3.0,
+    ncols: int = 5,
+    s: float = 0.5,
+    alpha: float = 0.8,
+    cmap: str = "viridis",
+) -> plt.Figure:
+    """Plot spatial distribution of factor uncertainty (scales/sigma).
+
+    The scale parameter represents the standard deviation of the variational
+    distribution q(F) = Normal(mu, scale^2). Higher values indicate greater
+    uncertainty in the latent factor at that spatial location.
+
+    Args:
+        scales: (N, L) array of scale values (std dev)
+        coords: (N, 2) spatial coordinates
+        moran_idx: Optional sort order by Moran's I (descending)
+        moran_values: Optional Moran's I values for titles
+        figsize_per_factor: Size per subplot
+        ncols: Number of columns
+        s: Scatter point size
+        alpha: Transparency
+        cmap: Colormap (viridis is good for uncertainty - low=dark, high=bright)
+
+    Returns:
+        matplotlib Figure
+    """
+    L = scales.shape[1]
+
+    # Reorder by Moran's I if provided
+    if moran_idx is not None:
+        scales = scales[:, moran_idx]
+        if moran_values is not None:
+            moran_values = moran_values  # Already sorted
+
+    nrows = int(np.ceil(L / ncols))
+    # Make figure wider to accommodate colorbar
+    fig, axes = plt.subplots(
+        nrows, ncols,
+        figsize=(figsize_per_factor * ncols + 1.0, figsize_per_factor * nrows),
+        squeeze=False
+    )
+
+    # Global color scale
+    vmin = np.percentile(scales, 2)
+    vmax = np.percentile(scales, 97.5)
+
+    for i in range(L):
+        row, col = divmod(i, ncols)
+        ax = axes[row, col]
+
+        sc = ax.scatter(
+            coords[:, 0], coords[:, 1],
+            c=scales[:, i],
+            vmin=vmin, vmax=vmax,
+            alpha=alpha, cmap=cmap, s=s
+        )
+        ax.invert_yaxis()
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.set_facecolor("gray")
+
+        # Title with Moran's I
+        if moran_values is not None:
+            title = f"Factor {moran_idx[i]+1}\nI={moran_values[i]:.3f}"
+        else:
+            title = f"Factor {i+1}"
+        ax.set_title(title, fontsize=9)
+
+    # Hide empty subplots
+    for i in range(L, nrows * ncols):
+        row, col = divmod(i, ncols)
+        axes[row, col].set_visible(False)
+
+    # Add colorbar
+    fig.subplots_adjust(right=0.92)
+    cbar_ax = fig.add_axes([0.94, 0.15, 0.02, 0.7])
+    fig.colorbar(sc, cax=cbar_ax, label="Scale (σ)")
+
     return fig
 
 
 def plot_elbo_curve(elbo_history: np.ndarray, figsize: tuple = (8, 5)) -> plt.Figure:
-    """Plot ELBO training curve.
+    """Plot ELBO training curve on log-log scale.
 
     Args:
         elbo_history: Array of ELBO values per iteration
@@ -165,18 +262,26 @@ def plot_elbo_curve(elbo_history: np.ndarray, figsize: tuple = (8, 5)) -> plt.Fi
     """
     fig, ax = plt.subplots(figsize=figsize)
 
-    iterations = np.arange(len(elbo_history))
+    # Use 1-indexed iterations for log scale (avoid log(0))
+    iterations = np.arange(1, len(elbo_history) + 1)
     ax.plot(iterations, elbo_history, linewidth=1.5, color="steelblue")
 
+    ax.set_xscale("log")
+    ax.set_yscale("symlog", linthresh=1e-10)
     ax.set_xlabel("Iteration", fontsize=12)
     ax.set_ylabel("ELBO", fontsize=12)
-    ax.set_title("Training Convergence", fontsize=14)
-    ax.grid(True, alpha=0.3)
+    ax.set_title("Training Convergence (log-log)", fontsize=14)
+    ax.grid(True, alpha=0.3, which="both")
+
+    # Set y-limits to focus on data range (all negative)
+    ymin = np.min(elbo_history) * 1.1
+    ymax = np.max(elbo_history) * 0.9
+    ax.set_ylim(ymin, ymax)
 
     # Mark final value
     final_elbo = elbo_history[-1]
     ax.axhline(final_elbo, color="red", linestyle="--", alpha=0.5, label=f"Final: {final_elbo:.2e}")
-    ax.legend(loc="lower right")
+    ax.legend(loc="upper right")
 
     fig.tight_layout()
     return fig
@@ -595,6 +700,7 @@ def run(config_path: str):
 
     Output files (outputs/{dataset}/{model}/figures/):
         factors_spatial.png       - Spatial factor visualization (sorted by Moran's I)
+        scales_spatial.png        - Factor uncertainty (sigma) spatial visualization
         elbo_curve.png            - Training convergence
         top_genes.png             - Top genes per factor (bar chart)
         factors_with_genes.png    - Factors + top gene expression (spatial, like GPzoo)
@@ -624,6 +730,7 @@ def run(config_path: str):
     results = _load_analysis_results(model_dir)
 
     factors = results.get("factors")
+    scales = results.get("scales")
     loadings = results.get("loadings")
     moran_idx = results.get("moran_idx")
     moran_values = results.get("moran_values")
@@ -646,6 +753,18 @@ def run(config_path: str):
         fig.savefig(figures_dir / "factors_spatial.png", dpi=150, bbox_inches="tight")
         plt.close(fig)
         print(f"  Saved: {figures_dir}/factors_spatial.png")
+
+    # 1b. Scales (uncertainty) spatial plot
+    if scales is not None:
+        print("Generating factor uncertainty (scales) spatial plot...")
+        fig = plot_scales_spatial(
+            scales, coords,
+            moran_idx=moran_idx,
+            moran_values=moran_values
+        )
+        fig.savefig(figures_dir / "scales_spatial.png", dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"  Saved: {figures_dir}/scales_spatial.png")
 
     # 2. ELBO curve
     if elbo_history is not None:

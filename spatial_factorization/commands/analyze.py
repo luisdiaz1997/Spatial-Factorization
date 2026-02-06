@@ -25,7 +25,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from PNMF.transforms import get_factors, log_factors, transform_W
+from PNMF.transforms import get_factors, log_factors, transform_W, factor_uncertainty
 
 from ..config import Config
 from ..datasets.base import load_preprocessed
@@ -357,6 +357,12 @@ def run(config_path: str):
 
     # Save factors
     np.save(model_dir / "factors.npy", factors)
+
+    # Save factor uncertainty (scales) - represents uncertainty in latent factors
+    print("Extracting factor uncertainty (scales)...")
+    scales = factor_uncertainty(model, return_variance=False)  # (N, L) - standard deviation
+    np.save(model_dir / "scales.npy", scales)
+    print(f"  Scales shape: {scales.shape}, mean: {scales.mean():.4f}")
 
     # Save global loadings
     np.save(model_dir / "loadings.npy", model.components_.T)  # (D, L)
