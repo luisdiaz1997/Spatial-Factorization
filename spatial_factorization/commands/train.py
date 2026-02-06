@@ -18,11 +18,15 @@ from ..datasets.base import load_preprocessed
 def _save_model(model, config: Config, model_dir: Path) -> None:
     """Save trained model to disk (both pickle and torch formats)."""
     # Pickle: Full model with sklearn API
-    with open(model_dir / "model.pkl", "wb") as f:
-        pickle.dump(model, f)
+    # Note: Spatial models with MGGP prior can't be pickled due to local class wrapper
+    try:
+        with open(model_dir / "model.pkl", "wb") as f:
+            pickle.dump(model, f)
+    except (AttributeError, TypeError) as e:
+        print(f"  Warning: Could not pickle model ({e}), saving torch state dict only")
 
     # PyTorch state_dict: More portable, version-independent
-    torch.save({
+    state = {
         "model_state_dict": model._model.state_dict(),
         "prior_state_dict": model._prior.state_dict(),
         "components": model.components_,
@@ -32,7 +36,14 @@ def _save_model(model, config: Config, model_dir: Path) -> None:
             "loadings_mode": config.model.get("loadings_mode", "projected"),
             "random_state": config.seed,
         },
-    }, model_dir / "model.pth")
+    }
+
+    # Add spatial-specific info for spatial models
+    if config.spatial:
+        state["hyperparameters"]["spatial"] = True
+        state["hyperparameters"]["prior"] = config.prior
+
+    torch.save(state, model_dir / "model.pth")
 
 
 def _save_elbo_history(elbo_history: list, model_dir: Path) -> None:
@@ -92,9 +103,20 @@ def run(config_path: str):
 
     model = PNMF(random_state=config.seed, **config.to_pnmf_kwargs())
 
-    # Train
+    # Train (spatial models require coordinates and groups)
     t0 = time.perf_counter()
-    elbo_history, model = model.fit(data.Y.numpy(), return_history=True)
+    if config.spatial:
+        print(f"  spatial=True, prior={config.prior}, groups={config.model.get('groups', True)}")
+        print(f"  Inducing points (M): {config.model.get('num_inducing', 3000)}")
+        print(f"  Kernel: {config.model.get('kernel', 'Matern32')} (lengthscale={config.model.get('lengthscale', 1.0)})")
+        elbo_history, model = model.fit(
+            data.Y.numpy(),
+            coordinates=data.X.numpy(),
+            groups=data.groups.numpy(),
+            return_history=True,
+        )
+    else:
+        elbo_history, model = model.fit(data.Y.numpy(), return_history=True)
     train_time = time.perf_counter() - t0
 
     max_iter = config.training.get("max_iter", 10000)

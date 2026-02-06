@@ -1,0 +1,40 @@
+# Test config for SVGP - short training for verification
+
+name: slideseq_svgp_test
+seed: 67
+dataset: slideseq
+output_dir: outputs/slideseq
+
+preprocessing:
+  spatial_scale: 50.0
+  filter_mt: true
+  min_counts: 100
+  min_cells: 10
+
+model:
+  n_components: 10
+  spatial: true
+  prior: SVGP
+  groups: true
+  mode: lower-bound
+  loadings_mode: multiplicative
+  kernel: Matern32
+  num_inducing: 3000
+  lengthscale: 3.0
+  sigma: 1.0
+  group_diff_param: 10.0
+  train_lengthscale: false
+  cholesky_mode: softplus
+  diagonal_only: false
+  inducing_allocation: proportional
+
+training:
+  max_iter: 1000    # Short for testing
+  learning_rate: 1e-3
+  optimizer: Adam
+  tol: 1e-4
+  verbose: false
+  device: gpu
+  batch_size: 7000
+  y_batch_size: 2000
+  shuffle: true

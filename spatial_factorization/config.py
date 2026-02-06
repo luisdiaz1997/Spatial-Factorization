@@ -86,6 +86,21 @@ class Config:
         kwargs["training_mode"] = self.model.get("training_mode", "standard")
         kwargs["E"] = self.model.get("E", 3)
 
+        # Spatial params (SVGP, VNNGP, LCGP)
+        if self.model.get("spatial", False):
+            kwargs["spatial"] = True
+            kwargs["prior"] = self.model.get("prior", "SVGP")
+            kwargs["kernel"] = self.model.get("kernel", "Matern32")
+            kwargs["multigroup"] = self.model.get("groups", True)
+            kwargs["num_inducing"] = self.model.get("num_inducing", 3000)
+            kwargs["lengthscale"] = float(self.model.get("lengthscale", 1.0))
+            kwargs["sigma"] = float(self.model.get("sigma", 1.0))
+            kwargs["group_diff_param"] = float(self.model.get("group_diff_param", 10.0))
+            kwargs["train_lengthscale"] = self.model.get("train_lengthscale", False)
+            kwargs["cholesky_mode"] = self.model.get("cholesky_mode", "exp")
+            kwargs["diagonal_only"] = self.model.get("diagonal_only", False)
+            kwargs["inducing_allocation"] = self.model.get("inducing_allocation", "proportional")
+
         # Training params
         kwargs["max_iter"] = self.training.get("max_iter", 10000)
         kwargs["learning_rate"] = float(self.training.get("learning_rate", 0.01))
