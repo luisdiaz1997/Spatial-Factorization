@@ -3,6 +3,7 @@
 Generates:
 - factors_spatial.png: Spatial factor visualization (sorted by Moran's I)
 - scales_spatial.png: Spatial factor uncertainty visualization (sigma values)
+- groups.png: Group spatial map (data + inducing groups side-by-side)
 - elbo_curve.png: Training ELBO convergence
 - top_genes.png: Top genes per factor by loading magnitude
 - factors_with_genes.png: Factors alongside top gene expression (like GPzoo notebooks)
@@ -126,8 +127,8 @@ def plot_factors_spatial(
     )
 
     # Global color scale
-    vmin = np.percentile(factors, 2.5)
-    vmax = np.percentile(factors, 97.5)
+    vmin = 0.0 #np.percentile(factors, 2.5)
+    vmax = np.percentile(factors, 99)
 
     for i in range(L):
         row, col = divmod(i, ncols)
@@ -211,9 +212,9 @@ def plot_scales_spatial(
         squeeze=False
     )
 
-    # Global color scale
-    vmin = np.percentile(scales, 2)
-    vmax = np.percentile(scales, 97.5)
+    # Fixed color scale for uncertainty
+    vmin = 0.0
+    vmax = 1.0
 
     for i in range(L):
         row, col = divmod(i, ncols)
@@ -681,8 +682,8 @@ def plot_lu_scales_at_inducing(
         squeeze=False,
     )
 
-    vmin = np.percentile(lu_scales, 2)
-    vmax = np.percentile(lu_scales, 97.5)
+    vmin = 0.0
+    vmax = 1.0
 
     for i in range(L):
         row, col = divmod(i, ncols)
@@ -715,6 +716,105 @@ def plot_lu_scales_at_inducing(
     fig.subplots_adjust(right=0.92)
     cbar_ax = fig.add_axes([0.94, 0.15, 0.02, 0.7])
     fig.colorbar(sc, cax=cbar_ax, label="diag(LuLu⊤)^½")
+
+    return fig
+
+
+def plot_groups(
+    coords: np.ndarray,
+    groups: np.ndarray,
+    group_names: List[str],
+    Z: Optional[np.ndarray] = None,
+    groupsZ: Optional[np.ndarray] = None,
+    s_data: float = 0.3,
+    s_inducing: float = 5.0,
+    alpha: float = 0.8,
+    figsize: tuple = (14, 6),
+) -> plt.Figure:
+    """Plot cell-type spatial map, with inducing-point groups side-by-side for spatial models.
+
+    Left subplot: all data points colored by cell-type at spatial coordinates.
+    Right subplot (spatial only): inducing points colored by their group assignment.
+    A shared legend on the right lists all group names.
+
+    Args:
+        coords: (N, 2) spatial coordinates of data points
+        groups: (N,) integer group codes (0-indexed)
+        group_names: List of group names (length = n_groups)
+        Z: (M, 2) inducing point locations (optional, spatial models only)
+        groupsZ: (M,) inducing point group assignments (optional, spatial models only)
+        s_data: Scatter point size for data points
+        s_inducing: Scatter point size for inducing points
+        alpha: Transparency
+        figsize: Figure size
+
+    Returns:
+        matplotlib Figure
+    """
+    has_inducing = Z is not None and groupsZ is not None
+    n_groups = len(group_names)
+
+    # Use a categorical colormap
+    if n_groups <= 10:
+        cmap = plt.cm.tab10
+    elif n_groups <= 20:
+        cmap = plt.cm.tab20
+    else:
+        cmap = plt.cm.gist_ncar
+    colors = [cmap(i / max(n_groups - 1, 1)) for i in range(n_groups)]
+
+    ncols = 2 if has_inducing else 1
+    fig, axes = plt.subplots(
+        1, ncols,
+        figsize=figsize if has_inducing else (figsize[0] / 2 + 2, figsize[1]),
+        squeeze=False,
+    )
+
+    # --- Left subplot: data cell-types ---
+    ax_data = axes[0, 0]
+    for g in range(n_groups):
+        mask = groups == g
+        ax_data.scatter(
+            coords[mask, 0], coords[mask, 1],
+            c=[colors[g]], s=s_data, alpha=alpha,
+            label=group_names[g], rasterized=True,
+        )
+    ax_data.invert_yaxis()
+    ax_data.set_xticks([])
+    ax_data.set_yticks([])
+    ax_data.set_facecolor("gray")
+    ax_data.set_title("Cell Types (data)", fontsize=12)
+
+    # --- Right subplot: inducing-point groups ---
+    if has_inducing:
+        ax_ind = axes[0, 1]
+        for g in range(n_groups):
+            mask = groupsZ == g
+            if mask.any():
+                ax_ind.scatter(
+                    Z[mask, 0], Z[mask, 1],
+                    c=[colors[g]], s=s_inducing, alpha=alpha,
+                    label=group_names[g], rasterized=True,
+                )
+        ax_ind.invert_yaxis()
+        ax_ind.set_xticks([])
+        ax_ind.set_yticks([])
+        ax_ind.set_facecolor("gray")
+        ax_ind.set_title("Cell Types (inducing points)", fontsize=12)
+
+    # --- Shared legend on the right, outside the subplots ---
+    handles, labels = axes[0, 0].get_legend_handles_labels()
+    fig.legend(
+        handles, labels,
+        loc="center right",
+        bbox_to_anchor=(1.0, 0.5),
+        fontsize=8,
+        title="Cell Type",
+        title_fontsize=10,
+        markerscale=5,
+        frameon=True,
+    )
+    fig.subplots_adjust(right=0.78)
 
     return fig
 
@@ -790,6 +890,7 @@ def run(config_path: str):
     Output files (outputs/{dataset}/{model}/figures/):
         factors_spatial.png       - Spatial factor visualization (sorted by Moran's I)
         scales_spatial.png        - Factor uncertainty (sigma) spatial visualization
+        groups.png               - Cell-type spatial map (data + inducing groups)
         elbo_curve.png            - Training convergence
         top_genes.png             - Top genes per factor (bar chart)
         factors_with_genes.png    - Factors + top gene expression (spatial, like GPzoo)
@@ -871,6 +972,25 @@ def run(config_path: str):
         fig.savefig(figures_dir / "lu_scales_inducing.png", dpi=150, bbox_inches="tight")
         plt.close(fig)
         print(f"  Saved: {figures_dir}/lu_scales_inducing.png")
+
+    # 1d. Cell-type spatial plot (data groups + inducing groups side-by-side)
+    if data.groups is not None:
+        print("Generating groups plot...")
+        groups_np = data.groups.numpy()
+        # Load inducing-point group assignments if available
+        groupsz_path = model_dir / "groupsZ.npy"
+        Z_celltype = None
+        groupsZ_celltype = None
+        if spatial and z_path.exists() and groupsz_path.exists():
+            Z_celltype = np.load(z_path)
+            groupsZ_celltype = np.load(groupsz_path)
+        fig = plot_groups(
+            coords, groups_np, group_names,
+            Z=Z_celltype, groupsZ=groupsZ_celltype,
+        )
+        fig.savefig(figures_dir / "groups.png", dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"  Saved: {figures_dir}/groups.png")
 
     # 2. ELBO curve
     if elbo_history is not None:

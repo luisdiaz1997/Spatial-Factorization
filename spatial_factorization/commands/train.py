@@ -22,7 +22,7 @@ def _save_model(model, config: Config, model_dir: Path) -> None:
     try:
         with open(model_dir / "model.pkl", "wb") as f:
             pickle.dump(model, f)
-    except (AttributeError, TypeError) as e:
+    except (AttributeError, TypeError, pickle.PicklingError) as e:
         print(f"  Warning: Could not pickle model ({e}), saving torch state dict only")
 
     # PyTorch state_dict: More portable, version-independent

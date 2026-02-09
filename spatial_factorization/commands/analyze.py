@@ -568,10 +568,13 @@ def run(config_path: str):
         import torch as _torch
         gp = model._prior
         Lu_constrained = gp.Lu.data  # (L, M, M) constrained Cholesky
-        Z = gp.state_dict()["Z"]     # (M, 2) inducing locations
+        sd = gp.state_dict()
+        Z = sd["Z"]                  # (M, 2) inducing locations
+        groupsZ = sd["groupsZ"]      # (M,) inducing point group assignments
         _torch.save(Lu_constrained, model_dir / "Lu.pt")
         np.save(model_dir / "Z.npy", Z.detach().cpu().numpy())
-        print(f"  Saved inducing-point data: Lu {tuple(Lu_constrained.shape)}, Z {tuple(Z.shape)}")
+        np.save(model_dir / "groupsZ.npy", groupsZ.detach().cpu().numpy())
+        print(f"  Saved inducing-point data: Lu {tuple(Lu_constrained.shape)}, Z {tuple(Z.shape)}, groupsZ {tuple(groupsZ.shape)}")
 
     # Save group-specific loadings and compute gene enrichment
     gene_enrichment = None

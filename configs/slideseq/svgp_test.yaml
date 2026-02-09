@@ -16,20 +16,20 @@ model:
   spatial: true
   prior: SVGP
   groups: true
-  mode: lower-bound
+  mode: expanded
   loadings_mode: multiplicative
   kernel: Matern32
   num_inducing: 3000
-  lengthscale: 3.0
+  lengthscale: 8.0
   sigma: 1.0
-  group_diff_param: 10.0
+  group_diff_param: 1.0
   train_lengthscale: false
-  cholesky_mode: softplus
+  cholesky_mode: exp
   diagonal_only: false
-  inducing_allocation: proportional
+  inducing_allocation: derived
 
 training:
-  max_iter: 1000    # Short for testing
+  max_iter: 20000    # Short for testing
   learning_rate: 1e-3
   optimizer: Adam
   tol: 1e-4
