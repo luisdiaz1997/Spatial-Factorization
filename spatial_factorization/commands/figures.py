@@ -630,6 +630,95 @@ def plot_factors_with_top_genes(
     return fig
 
 
+def plot_lu_scales_at_inducing(
+    Lu: "torch.Tensor",
+    Z: "torch.Tensor",
+    moran_idx: Optional[np.ndarray] = None,
+    moran_values: Optional[np.ndarray] = None,
+    figsize_per_factor: float = 3.0,
+    ncols: int = 5,
+    s: float = 2.0,
+    alpha: float = 0.8,
+    cmap: str = "viridis",
+) -> plt.Figure:
+    """Plot inducing-point uncertainty from the Cholesky factor Lu.
+
+    Computes diag(Lu @ Lu^T).sqrt() per factor, i.e. the marginal standard
+    deviation of the variational distribution q(u) at each inducing point,
+    and scatter-plots the result at the inducing locations Z.
+
+    Args:
+        Lu: (L, M, M) constrained lower-triangular Cholesky factor
+        Z: (M, 2) inducing point locations
+        moran_idx: Optional sort order by Moran's I (descending)
+        moran_values: Optional Moran's I values for titles
+        figsize_per_factor: Size per subplot
+        ncols: Number of columns
+        s: Scatter point size
+        alpha: Transparency
+        cmap: Colormap
+
+    Returns:
+        matplotlib Figure
+    """
+    import torch as _torch
+
+    # diag(Lu @ Lu^T) = sum of squares along last dim of each row
+    # Lu is (L, M, M), result is (L, M)
+    lu_scales = _torch.sum(Lu ** 2, dim=-1).sqrt().detach().cpu().numpy()  # (L, M)
+    Z_np = Z.detach().cpu().numpy() if hasattr(Z, 'detach') else np.asarray(Z)
+
+    L, M = lu_scales.shape
+
+    # Reorder by Moran's I if provided
+    if moran_idx is not None:
+        lu_scales = lu_scales[moran_idx]
+
+    nrows = int(np.ceil(L / ncols))
+    fig, axes = plt.subplots(
+        nrows, ncols,
+        figsize=(figsize_per_factor * ncols + 1.0, figsize_per_factor * nrows),
+        squeeze=False,
+    )
+
+    vmin = np.percentile(lu_scales, 2)
+    vmax = np.percentile(lu_scales, 97.5)
+
+    for i in range(L):
+        row, col = divmod(i, ncols)
+        ax = axes[row, col]
+
+        sc = ax.scatter(
+            Z_np[:, 0], Z_np[:, 1],
+            c=lu_scales[i],
+            vmin=vmin, vmax=vmax,
+            alpha=alpha, cmap=cmap, s=s,
+        )
+        ax.invert_yaxis()
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.set_facecolor("gray")
+
+        if moran_idx is not None and moran_values is not None:
+            title = f"Factor {moran_idx[i]+1}\nI={moran_values[i]:.3f}"
+        elif moran_idx is not None:
+            title = f"Factor {moran_idx[i]+1}"
+        else:
+            title = f"Factor {i+1}"
+        ax.set_title(title, fontsize=9)
+
+    # Hide empty subplots
+    for i in range(L, nrows * ncols):
+        row, col = divmod(i, ncols)
+        axes[row, col].set_visible(False)
+
+    fig.subplots_adjust(right=0.92)
+    cbar_ax = fig.add_axes([0.94, 0.15, 0.02, 0.7])
+    fig.colorbar(sc, cax=cbar_ax, label="diag(LuLu⊤)^½")
+
+    return fig
+
+
 def plot_top_enriched_genes_per_group(
     gene_enrichment: dict,
     factor_idx: int,
@@ -765,6 +854,23 @@ def run(config_path: str):
         fig.savefig(figures_dir / "scales_spatial.png", dpi=150, bbox_inches="tight")
         plt.close(fig)
         print(f"  Saved: {figures_dir}/scales_spatial.png")
+
+    # 1c. Lu inducing-point uncertainty (spatial models only)
+    lu_path = model_dir / "Lu.pt"
+    z_path = model_dir / "Z.npy"
+    if spatial and lu_path.exists() and z_path.exists():
+        import torch
+        print("Generating Lu inducing-point uncertainty plot...")
+        Lu_constrained = torch.load(lu_path, map_location="cpu", weights_only=False)
+        Z = np.load(z_path)
+        fig = plot_lu_scales_at_inducing(
+            Lu_constrained, Z,
+            moran_idx=moran_idx,
+            moran_values=moran_values,
+        )
+        fig.savefig(figures_dir / "lu_scales_inducing.png", dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"  Saved: {figures_dir}/lu_scales_inducing.png")
 
     # 2. ELBO curve
     if elbo_history is not None:

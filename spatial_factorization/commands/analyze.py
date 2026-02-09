@@ -35,8 +35,8 @@ from ..datasets.base import load_preprocessed
 def _load_model(model_dir: Path):
     """Load trained PNMF model from pickle or torch state dict.
 
-    For spatial models, pickle fails due to MGGPWrapper, so we load from
-    the .pth file and reconstruct the model.
+    For spatial models, pickle fails due to MGGPWrapper, so we reconstruct
+    the model architecture directly from GPzoo and load the state dict.
     """
     # Try pickle first (works for non-spatial models)
     pkl_path = model_dir / "model.pkl"
@@ -44,78 +44,150 @@ def _load_model(model_dir: Path):
         try:
             with open(pkl_path, "rb") as f:
                 return pickle.load(f)
-        except (AttributeError, TypeError, EOFError):
+        except (AttributeError, TypeError, EOFError, pickle.PicklingError):
             # Pickle failed (likely spatial model), load from .pth
             pass
 
     # Load from torch state dict and reconstruct
-    import torch
     from PNMF import PNMF
+    from PNMF.models import PoissonFactorization
 
     state = torch.load(model_dir / "model.pth", map_location="cpu", weights_only=False)
     hyperparams = state["hyperparameters"]
 
-    # Check if this is a spatial model
     is_spatial = hyperparams.get("spatial", False)
-
     n_components = hyperparams["n_components"]
     n_features = state["components"].shape[1]
+    mode = hyperparams.get("mode", "expanded")
+    loadings_mode = hyperparams.get("loadings_mode", "projected")
+
+    # Create the PNMF wrapper (holds sklearn-like attributes)
+    model = PNMF(
+        n_components=n_components,
+        mode=mode,
+        loadings_mode=loadings_mode,
+        random_state=hyperparams.get("random_state", 0),
+        spatial=is_spatial,
+        prior=hyperparams.get("prior", "SVGP") if is_spatial else "GaussianPrior",
+    )
 
     if is_spatial:
-        # For spatial models, create PNMF with spatial=True
-        # We need to pass the spatial parameters so PNMF can create the right prior
-        # Extract num_inducing from the saved state
-        num_inducing = state["prior_state_dict"]["Z"].shape[0]
+        # Reconstruct the MGGP_SVGP prior directly from saved state
+        import torch.nn as nn
+        from gpzoo.gp import MGGP_SVGP
+        from gpzoo.kernels import batched_MGGP_Matern32
+        from gpzoo.modules import CholeskyParameter
 
-        model = PNMF(
-            n_components=n_components,
-            mode=hyperparams.get("mode", "expanded"),
-            loadings_mode=hyperparams.get("loadings_mode", "projected"),
-            random_state=hyperparams.get("random_state", 0),
-            spatial=True,
-            prior=hyperparams.get("prior", "SVGP"),
-            num_inducing=num_inducing,
+        prior_sd = state["prior_state_dict"]
+        Z = prior_sd["Z"]                  # (M, 2)
+        groupsZ = prior_sd["groupsZ"]      # (M,)
+        mu = prior_sd["mu"]                # (L, M)
+        M = Z.shape[0]
+        L = mu.shape[0]
+        dim = Z.shape[1]
+        n_groups = int(groupsZ.max().item()) + 1
+
+        # Reconstruct kernel (state dict will overwrite params)
+        kernel = batched_MGGP_Matern32(
+            sigma=1.0, lengthscale=1.0,
+            group_diff_param=10.0, n_groups=n_groups,
         )
+
+        # Reconstruct GP prior
+        gp = MGGP_SVGP(
+            kernel, dim=dim, M=M, n_groups=n_groups,
+            jitter=1e-5, cholesky_mode="exp", diagonal_only=False,
+        )
+
+        # Replace mu and Lu with correct batched shapes (L, M) and (L, M, M)
+        del gp.Lu
+        gp.Lu = CholeskyParameter((L, M), mode="exp", diagonal_only=False)
+        gp.mu = nn.Parameter(torch.randn(L, M) * 0.01)
+
+        # Load the trained prior state
+        gp.load_state_dict(prior_sd)
+        model._prior = gp
+
+        # Reconstruct PoissonFactorization with a dummy y (only shape matters)
+        # D = n_features (from components), N is not used beyond shape
+        model_sd = state["model_state_dict"]
+        D = n_features
+        dummy_y = torch.empty(D, 1)
+        model._model = PoissonFactorization(
+            prior=gp, y=dummy_y, L=L,
+            loadings_mode=loadings_mode, mode=mode,
+        )
+        model._model.load_state_dict(model_sd)
     else:
-        # For non-spatial models, use PNMF class normally
-        model = PNMF(
-            n_components=n_components,
-            mode=hyperparams.get("mode", "expanded"),
-            loadings_mode=hyperparams.get("loadings_mode", "projected"),
-            random_state=hyperparams.get("random_state", 0),
+        # Non-spatial: reconstruct with GaussianPrior
+        from PNMF.priors import GaussianPrior
+
+        prior_sd = state["prior_state_dict"]
+        model_sd = state["model_state_dict"]
+
+        # Infer shapes from state dict
+        # GaussianPrior.mean is (L, N)
+        L, N = prior_sd["mean"].shape
+        D = model_sd["W.param"].shape[0]
+
+        dummy_y = torch.empty(D, N)
+        prior = GaussianPrior(y=dummy_y, L=L)
+        prior.load_state_dict(prior_sd)
+        model._prior = prior
+
+        model._model = PoissonFactorization(
+            prior=prior, y=dummy_y, L=L,
+            loadings_mode=loadings_mode, mode=mode,
         )
+        model._model.load_state_dict(model_sd)
 
-    # For spatial models, we need to create the internal _model via fit() first
-    # so that the proper MGGP_SVGP prior is created. Then we can load the trained state.
-    if is_spatial:
-        # Create dummy data to initialize the model structure
-        # Use more samples than inducing points to avoid initialization issues
-        import numpy as np
-        n_dummy = max(5000, state["prior_state_dict"]["Z"].shape[0] + 1000)
-        dummy_Y = np.random.rand(n_dummy, n_features).astype(np.float32) * 10  # (N, D) positive counts
-        dummy_X = np.random.randn(n_dummy, 2).astype(np.float32)  # (N, 2)
-        dummy_C = np.random.randint(0, 14, n_dummy).astype(np.int64)  # (N,)
-
-        # Temporarily set max_iter=1 for initialization
-        original_max_iter = model.max_iter
-        model.max_iter = 1
-
-        # Call fit to initialize the model structure
-        # (we'll overwrite with trained state immediately after)
-        model.fit(dummy_Y, coordinates=dummy_X, groups=dummy_C)
-
-        # Restore original max_iter
-        model.max_iter = original_max_iter
-
-    # Now load the trained state
-    model._model.load_state_dict(state["model_state_dict"])
-
-    # Set components and sklearn-like attributes
+    # Set sklearn-like attributes
     model.components_ = state["components"]
     model.n_components_ = n_components
     model.n_features_in_ = n_features
 
     return model
+
+
+def _print_model_summary(model):
+    """Print summary of learned model parameters."""
+    print(f"  Components (L): {model.n_components_}")
+    print(f"  Features (D):   {model.n_features_in_}")
+
+    # Check if spatial (has a GP prior with kernel)
+    is_spatial = hasattr(model, '_prior') and hasattr(model._prior, 'kernel')
+
+    if is_spatial:
+        kernel = model._prior.kernel
+        sigma = kernel.sigma.data
+        lengthscale = kernel.lengthscale.data
+
+        # Handle scalar or batched kernel params
+        if sigma.dim() == 0:
+            print(f"  Kernel sigma:       {sigma.item():.4f}")
+        else:
+            print(f"  Kernel sigma:       {sigma.cpu().numpy()}")
+
+        if lengthscale.dim() == 0:
+            print(f"  Kernel lengthscale: {lengthscale.item():.4f}")
+        else:
+            print(f"  Kernel lengthscale: {lengthscale.cpu().numpy()}")
+
+        # Group diff parameter (MGGP kernel)
+        if hasattr(kernel, 'group_diff_param'):
+            gdp = kernel.group_diff_param.data
+            if gdp.dim() == 0:
+                print(f"  Group diff param:   {gdp.item():.4f}")
+            else:
+                print(f"  Group diff param:   {gdp.cpu().numpy()}")
+
+        # Inducing points and groups
+        sd = model._prior.state_dict()
+        if "Z" in sd:
+            print(f"  Inducing points (M): {sd['Z'].shape[0]}")
+        if "groupsZ" in sd:
+            n_groups = int(sd["groupsZ"].max().item()) + 1
+            print(f"  Groups:             {n_groups}")
 
 
 def _compute_reconstruction_error(model, Y: np.ndarray, coordinates=None, groups=None) -> float:
@@ -416,6 +488,7 @@ def run(config_path: str):
     # Load trained model
     print(f"Loading trained model from: {model_dir}/")
     model = _load_model(model_dir)
+    _print_model_summary(model)
 
     # Extract factors (for spatial models, pass coordinates and groups)
     print("Extracting factors...")
@@ -489,6 +562,16 @@ def run(config_path: str):
 
     # Save global loadings
     np.save(model_dir / "loadings.npy", model.components_.T)  # (D, L)
+
+    # Save inducing-point data for spatial models (used by figures stage)
+    if spatial:
+        import torch as _torch
+        gp = model._prior
+        Lu_constrained = gp.Lu.data  # (L, M, M) constrained Cholesky
+        Z = gp.state_dict()["Z"]     # (M, 2) inducing locations
+        _torch.save(Lu_constrained, model_dir / "Lu.pt")
+        np.save(model_dir / "Z.npy", Z.detach().cpu().numpy())
+        print(f"  Saved inducing-point data: Lu {tuple(Lu_constrained.shape)}, Z {tuple(Z.shape)}")
 
     # Save group-specific loadings and compute gene enrichment
     gene_enrichment = None
