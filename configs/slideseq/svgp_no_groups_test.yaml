@@ -27,7 +27,7 @@ model:
   diagonal_only: false
 
 training:
-  max_iter: 2000   # Short for testing
+  max_iter: 50000   # Short for testing
   learning_rate: 2e-3
   optimizer: Adam
   tol: 1e-4

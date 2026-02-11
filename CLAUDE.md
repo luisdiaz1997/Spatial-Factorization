@@ -197,12 +197,18 @@ When `groups: false`:
 # Install
 pip install -e .
 
-# Four-stage pipeline
+# Single stage
 spatial_factorization preprocess -c configs/slideseq/pnmf.yaml      # Run once per dataset
 spatial_factorization train      -c configs/slideseq/svgp_test.yaml  # Model-specific
 spatial_factorization analyze    -c configs/slideseq/svgp_test.yaml
 spatial_factorization figures    -c configs/slideseq/svgp_test.yaml
+
+# Chain multiple stages with `run`
+spatial_factorization run train analyze figures -c configs/slideseq/svgp_test.yaml
+spatial_factorization run preprocess train analyze figures -c configs/slideseq/pnmf.yaml
 ```
+
+Stages passed to `run` are automatically sorted into pipeline order (`preprocess → train → analyze → figures`).
 
 ## Available Configs
 
