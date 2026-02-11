@@ -902,9 +902,7 @@ def run(config_path: str):
 
     # Determine model directory
     spatial = config.model.get("spatial", False)
-    prior = config.model.get("prior", "GaussianPrior")
-    model_name = prior.lower() if spatial else "pnmf"
-    model_dir = output_dir / model_name
+    model_dir = output_dir / config.model_name
 
     # Create figures directory
     figures_dir = model_dir / "figures"

@@ -42,6 +42,7 @@ def _save_model(model, config: Config, model_dir: Path) -> None:
     if config.spatial:
         state["hyperparameters"]["spatial"] = True
         state["hyperparameters"]["prior"] = config.prior
+        state["hyperparameters"]["multigroup"] = config.groups
 
     torch.save(state, model_dir / "model.pth")
 
@@ -103,18 +104,21 @@ def run(config_path: str):
 
     model = PNMF(random_state=config.seed, **config.to_pnmf_kwargs())
 
-    # Train (spatial models require coordinates and groups)
+    # Train (spatial models require coordinates; groups are optional)
     t0 = time.perf_counter()
     if config.spatial:
-        print(f"  spatial=True, prior={config.prior}, groups={config.model.get('groups', True)}")
+        print(f"  spatial=True, prior={config.prior}, groups={config.groups}")
         print(f"  Inducing points (M): {config.model.get('num_inducing', 3000)}")
         print(f"  Kernel: {config.model.get('kernel', 'Matern32')} (lengthscale={config.model.get('lengthscale', 1.0)})")
-        elbo_history, model = model.fit(
-            data.Y.numpy(),
+
+        fit_kwargs = dict(
             coordinates=data.X.numpy(),
-            groups=data.groups.numpy(),
             return_history=True,
         )
+        if config.groups:
+            fit_kwargs["groups"] = data.groups.numpy()
+
+        elbo_history, model = model.fit(data.Y.numpy(), **fit_kwargs)
     else:
         elbo_history, model = model.fit(data.Y.numpy(), return_history=True)
     train_time = time.perf_counter() - t0
@@ -126,10 +130,7 @@ def run(config_path: str):
     print(f"  Converged:      {model.n_iter_ < max_iter}")
 
     # Create model-specific output directory
-    spatial = config.model.get("spatial", False)
-    prior = config.model.get("prior", "GaussianPrior")
-    model_name = prior.lower() if spatial else "pnmf"
-    model_dir = output_dir / model_name
+    model_dir = output_dir / config.model_name
     model_dir.mkdir(parents=True, exist_ok=True)
 
     # Save outputs

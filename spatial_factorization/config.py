@@ -75,6 +75,26 @@ class Config:
         """Return whether spatial mode is enabled."""
         return self.model.get("spatial", False)
 
+    @property
+    def groups(self) -> bool:
+        """Return whether multi-group (MGGP) mode is enabled."""
+        return self.model.get("groups", False)
+
+    @property
+    def model_name(self) -> str:
+        """Return model directory name based on spatial/groups config.
+
+        - Non-spatial: "pnmf"
+        - Spatial, no groups: "{prior}" e.g. "SVGP"
+        - Spatial, with groups: "MGGP_{prior}" e.g. "MGGP_SVGP"
+        """
+        if not self.spatial:
+            return "pnmf"
+        prior = self.model.get("prior", "SVGP")
+        if self.groups:
+            return f"MGGP_{prior}"
+        return prior
+
     def to_pnmf_kwargs(self) -> Dict[str, Any]:
         """Merge model and training configs for PNMF constructor."""
         kwargs = {}
@@ -91,7 +111,7 @@ class Config:
             kwargs["spatial"] = True
             kwargs["prior"] = self.model.get("prior", "SVGP")
             kwargs["kernel"] = self.model.get("kernel", "Matern32")
-            kwargs["multigroup"] = self.model.get("groups", True)
+            kwargs["multigroup"] = self.model.get("groups", False)
             kwargs["num_inducing"] = self.model.get("num_inducing", 3000)
             kwargs["lengthscale"] = float(self.model.get("lengthscale", 1.0))
             kwargs["sigma"] = float(self.model.get("sigma", 1.0))

@@ -2,74 +2,38 @@
 
 ---
 
-## URGENT: Active Implementation Plan
-
-**READ THIS FIRST:** [SLIDESEQ_PNMF_PLANNING.md](./SLIDESEQ_PNMF_PLANNING.md)
-
-This document contains the detailed implementation plan for:
-- CLI commands: `preprocess`, `train`, `analyze`, `figures`
-- Standardized data format (X, Y, C as .npy files)
-- Code references to borrow from GPzoo/PNMF
-- Four-stage pipeline architecture
-
----
-
 ## Environment Setup
 
-**CRITICAL: Always activate the `factorization` conda environment before running commands!**
+**CRITICAL: Always use the `factorization` conda environment!**
 
 ```bash
-# Activate the factorization environment
 conda activate factorization
-
-# Verify you're in the right environment
-which python  # Should show: /Users/luisfcd/opt/miniconda3/envs/factorization/bin/python
+# Or for non-interactive contexts:
+conda run -n factorization <command>
 ```
 
-**Current environment:** `factorization` (Python 3.10)
-**Location:** `/Users/luisfcd/opt/miniconda3/envs/factorization`
-
-### First-time Setup (if environment doesn't exist)
-
-```bash
-# Create new conda environment named 'factorization'
-conda create -n factorization python=3.10 -y
-conda activate factorization
-
-# Install core dependencies
-pip install torch>=2.0.0 numpy>=1.21.0 scipy>=1.7.0 pandas>=1.3.0
-pip install scikit-learn>=1.0.0 tqdm>=4.62.0 pyyaml>=6.0 click>=8.0
-
-# Install bioinformatics packages
-pip install scanpy>=1.9.0 anndata>=0.8.0 squidpy>=1.2.0
-
-# Install testing dependencies
-pip install pytest>=7.0.0
-
-# Install this package
-pip install -e .
-
-# Install sibling packages (PNMF, GPzoo) - adjust paths as needed
-pip install -e ../Probabilistic-NMF
-pip install -e ../GPzoo
-```
-
-**Note:** The previous environment had squidpy/numba segfault issues. Using specific versions (scanpy==1.10.0, squidpy==1.5.0) with Python 3.10 should resolve this.
+**Python:** 3.14 | **Location:** `/gladstone/engelhardt/home/lchumpitaz/miniconda3/envs/factorization`
 
 ---
 
 ## Project Overview
 
-This repository provides dataset loaders and configuration utilities for spatial transcriptomics analysis. It is designed to work with the PNMF package for model fitting.
+Four-stage CLI pipeline for spatial transcriptomics analysis using PNMF + GP priors.
+
+```
+preprocess → train → analyze → figures
+```
+
+All stages are **implemented and working**.
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                   Spatial-Factorization                     │
+│                   Spatial-Factorization                      │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐ │
-│  │   Configs   │  │  Datasets   │  │     Notebooks       │ │
-│  │   (YAML)    │  │  (loaders)  │  │    (analysis)       │ │
+│  │   Configs   │  │  Datasets   │  │   Commands (CLI)    │ │
+│  │   (YAML)    │  │  (loaders)  │  │ train/analyze/figs  │ │
 │  └─────────────┘  └─────────────┘  └─────────────────────┘ │
 └─────────────────────────────────────────────────────────────┘
                            │
@@ -77,9 +41,9 @@ This repository provides dataset loaders and configuration utilities for spatial
            ▼                               ▼
 ┌─────────────────────┐         ┌─────────────────────┐
 │        PNMF         │         │       GPzoo         │
-│  - sklearn API      │         │  - SVGP, VNNGP      │
-│  - spatial=True     │◄────────│  - LCGP, kernels    │
-│  - ELBO modes       │         │  - modules          │
+│  - sklearn API      │         │  - SVGP, MGGP_SVGP  │
+│  - spatial=True     │◄────────│  - batched kernels   │
+│  - multigroup       │         │  - CholeskyParameter  │
 └─────────────────────┘         └─────────────────────┘
 ```
 
@@ -88,146 +52,144 @@ This repository provides dataset loaders and configuration utilities for spatial
 ```
 Spatial-Factorization/
 ├── spatial_factorization/
-│   ├── __init__.py             # Package exports
-│   ├── config.py               # Config dataclasses
+│   ├── __init__.py
+│   ├── config.py               # Config dataclass with model_name, groups, spatial properties
 │   ├── cli.py                  # Click CLI entry point
-│   ├── analysis.py             # plot_factors, etc.
-│   ├── commands/               # CLI commands
-│   │   ├── __init__.py
-│   │   ├── preprocess.py       # Standardize data format
-│   │   ├── train.py            # Train PNMF model
-│   │   ├── analyze.py          # Compute metrics
-│   │   └── figures.py          # Generate plots
-│   └── datasets/               # Dataset loaders (dataset-specific)
-│       ├── __init__.py
-│       ├── base.py             # SpatialData container
-│       ├── preprocessed.py     # Load preprocessed .npy files
+│   ├── commands/
+│   │   ├── preprocess.py       # Stage 1: Standardize data format
+│   │   ├── train.py            # Stage 2: Train PNMF model
+│   │   ├── analyze.py          # Stage 3: Compute metrics, factors, loadings
+│   │   └── figures.py          # Stage 4: Generate plots
+│   └── datasets/
+│       ├── base.py             # SpatialData container + load_preprocessed()
 │       ├── slideseq.py         # SlideseqV2 loader
 │       └── tenxvisium.py       # 10x Visium loader
-├── scripts/
-│   └── install_deps.sh         # Install PNMF/GPzoo from sibling dirs
-├── configs/                    # YAML experiment configs
-│   └── slideseq/
-│       └── pnmf.yaml
-├── outputs/                    # Generated (git-ignored)
-├── setup.py                    # Minimal wrapper (PEP 517 compat)
+├── configs/slideseq/
+│   ├── pnmf.yaml               # Non-spatial baseline
+│   ├── svgp.yaml                # MGGP_SVGP (full training)
+│   ├── svgp_test.yaml           # MGGP_SVGP (10 epochs, testing)
+│   └── svgp_no_groups_test.yaml # SVGP no groups (10 epochs, testing)
+├── tests/
+│   └── test_svgp_model.py       # SVGP model inspection tests
+├── outputs/                     # Generated (git-ignored)
+├── setup.py
 ├── pyproject.toml
-└── README.md
+└── CLAUDE.md
 ```
+
+---
+
+## Output Directory Naming Convention
+
+Model output directories are determined by `config.model_name`:
+
+| Config | `model_name` | Directory |
+|--------|-------------|-----------|
+| `spatial: false` | `pnmf` | `outputs/slideseq/pnmf/` |
+| `spatial: true, groups: false` | `SVGP` | `outputs/slideseq/SVGP/` |
+| `spatial: true, groups: true` | `MGGP_SVGP` | `outputs/slideseq/MGGP_SVGP/` |
+
+The naming uses the prior name directly (uppercase). When `groups: true`, the `MGGP_` prefix is added.
+
+### Output Directory Structure
+
+```
+outputs/slideseq/
+├── preprocessed/           # Shared by all models (Stage 1)
+│   ├── X.npy               # (N, 2) spatial coordinates
+│   ├── Y.npz               # (D, N) count matrix (sparse)
+│   ├── C.npy               # (N,) group codes (integers 0..G-1)
+│   └── metadata.json       # gene_names, group_names, etc.
+│
+├── MGGP_SVGP/              # groups=true output
+│   ├── model.pth            # PyTorch state dict
+│   ├── training.json        # Metadata
+│   ├── elbo_history.csv     # ELBO convergence
+│   ├── config.yaml          # Config snapshot
+│   ├── factors.npy          # (N, L) factor values
+│   ├── scales.npy           # (N, L) factor uncertainty
+│   ├── loadings.npy         # (D, L) global loadings
+│   ├── loadings_group_*.npy # (D, L) per-group loadings
+│   ├── Z.npy                # (M, 2) inducing point locations
+│   ├── groupsZ.npy          # (M,) inducing point group assignments
+│   ├── Lu.pt                # (L, M, M) Cholesky variational covariance
+│   ├── moran_i.csv          # Moran's I per factor
+│   ├── gene_enrichment.json # LFC per factor per group
+│   ├── metrics.json         # All computed metrics
+│   └── figures/
+│       ├── factors_spatial.png
+│       ├── scales_spatial.png
+│       ├── lu_scales_inducing.png
+│       ├── groups.png
+│       ├── elbo_curve.png
+│       ├── top_genes.png
+│       ├── factors_with_genes.png
+│       ├── gene_enrichment.png
+│       ├── enrichment_factor_*.png
+│       └── enrichment_by_group/
+│
+└── SVGP/                   # groups=false output
+    ├── model.pth            # (pickle also works for non-MGGP)
+    ├── model.pkl
+    ├── factors.npy, scales.npy, loadings.npy
+    ├── Z.npy, Lu.pt         # Inducing data (NO groupsZ)
+    ├── moran_i.csv          # (NO gene_enrichment, NO group loadings)
+    ├── metrics.json
+    └── figures/              # (NO enrichment or group plots)
+```
+
+---
+
+## Key Config Properties (`config.py`)
+
+```python
+config = Config.from_yaml("configs/slideseq/svgp_test.yaml")
+
+config.spatial      # bool: model.spatial (default False)
+config.groups       # bool: model.groups (default False)
+config.prior        # str: model.prior (e.g., "SVGP")
+config.model_name   # str: "pnmf" | "SVGP" | "MGGP_SVGP" (used for output dir)
+config.to_pnmf_kwargs()  # dict: merged model+training kwargs for PNMF constructor
+```
+
+The `groups` config field maps to PNMF's `multigroup` parameter:
+- `groups: true` → `multigroup=True` → uses `MGGP_SVGP` + `batched_MGGP_Matern32`
+- `groups: false` → `multigroup=False` → uses `SVGP` + `batched_Matern32` + K-means inducing points
+
+---
 
 ## Key Design Decisions
 
-### 1. Models and Training Live in PNMF
+### 1. Models Live in PNMF, Analysis Lives Here
 
-This package does NOT implement models or training loops. Those belong in PNMF:
+This package does NOT implement models or training loops. It provides:
+- Dataset loaders and preprocessing
+- Config management
+- Analysis pipeline (metrics, factors, loadings, enrichment)
+- Figure generation
 
-```python
-# Correct: use PNMF for models
-from PNMF import PNMF
-model = PNMF(n_components=10, spatial=True, gp_class='LCGP')
-model.fit(Y, X=coordinates)
+### 2. Spatial Model Variants
 
-# Wrong: don't create model factories here
-# from spatial_factorization.models import build_model  # NO
-```
+| Variant | PNMF params | GPzoo classes | Groups required |
+|---------|-------------|---------------|-----------------|
+| **MGGP_SVGP** | `spatial=True, multigroup=True` | `MGGP_SVGP`, `batched_MGGP_Matern32` | Yes |
+| **SVGP** | `spatial=True, multigroup=False` | `SVGP`, `batched_Matern32` | No |
+| **pnmf** | `spatial=False` | None (GaussianPrior) | No |
 
-### 2. Config Stores Settings, PNMF Builds Models
+### 3. Model Loading in analyze.py
 
-Configs are for reproducibility and experiment tracking:
+`_load_model()` detects MGGP vs SVGP by checking if `groupsZ` exists in the prior state dict:
+- `groupsZ` present → reconstruct `MGGP_SVGP` + `batched_MGGP_Matern32`
+- `groupsZ` absent → reconstruct `SVGP` + `batched_Matern32`
 
-```python
-from spatial_factorization import Config, load_dataset
-from PNMF import PNMF
+### 4. Groups vs No-Groups Pipeline Behavior
 
-config = Config.from_yaml("configs/slideseq/lcgp.yaml")
-data = load_dataset(config.dataset)
+When `groups: false`:
+- **train**: Only passes `coordinates` to `model.fit()` (no `groups` arg)
+- **analyze**: Skips group-specific loadings, gene enrichment, groupsZ saving
+- **figures**: Skips enrichment plots, group plots still show data groups (from C.npy) but no inducing groups
 
-# Config provides kwargs, PNMF builds the model
-model = PNMF(**config.model.to_pnmf_kwargs(), **config.training.to_pnmf_kwargs())
-model.fit(data.Y.T.numpy(), X=data.X.numpy())
-```
-
-### 3. SpatialData Container
-
-The `SpatialData` dataclass holds:
-- `X`: Spatial coordinates (N, 2) - used in analysis/plotting, ignored in non-spatial training
-- `Y`: Count matrix (D, N) - genes x spots (GPzoo convention) - used in training
-- `C`: Group codes (N,) - used in analysis/plotting, ignored in non-spatial training
-- `gene_names`, `spot_names`, `group_names`: Metadata
-
-Note: PNMF's sklearn API expects (N, D), so use `data.Y.T`.
-
-## Dependencies
-
-- **pnmf**: Model fitting (sklearn API with spatial=True)
-- **gpzoo**: GP backends (used internally by PNMF)
-- **scanpy, squidpy**: Data loading
-- **pyyaml**: Config parsing
-- **click**: CLI framework
-
-### Installing PNMF and GPzoo
-
-PNMF and GPzoo are sibling repositories that must be installed locally for development. The `scripts/install_deps.sh` helper script handles this:
-
-```bash
-# Install PNMF and GPzoo from sibling directories
-./scripts/install_deps.sh
-```
-
-The script expects:
-- `../Probabilistic-NMF/` - PNMF repository
-- `../GPzoo/` - GPzoo repository
-
-Adjust paths if your directory structure differs.
-
-### Installation
-
-```bash
-# 1. Install dependencies (PNMF, GPzoo)
-./scripts/install_deps.sh
-
-# 2. Install spatial-factorization
-pip install -e .
-
-# 3. Verify CLI works
-spatial_factorization --help
-```
-
-**Note:** The CLI entry point is configured in `pyproject.toml` as:
-```
-[project.scripts]
-spatial_factorization = "spatial_factorization.cli:cli"
-```
-
-A minimal `setup.py` wrapper is provided for PEP 517 backwards compatibility.
-
-## Relationship to Other Repos
-
-| Repo | Purpose | What Lives Here |
-|------|---------|-----------------|
-| **GPzoo** | GP backends | SVGP, VNNGP, LCGP, kernels, modules |
-| **PNMF** | sklearn API | `PNMF` class, ELBO computation, `spatial=True` support |
-| **Spatial-Factorization** | Analysis | Dataset loaders, configs, notebooks |
-
-## Implementation Status
-
-See [SLIDESEQ_PNMF_PLANNING.md](./SLIDESEQ_PNMF_PLANNING.md) for the detailed 4-stage implementation plan.
-
-| Stage | Status | Description |
-|-------|--------|-------------|
-| 0 | **DONE** | Setup & Installation (CLI entry point, package structure) |
-| 1 | TODO | Preprocess command (standardize data format) |
-| 2 | TODO | Train command (PNMF model fitting) |
-| 3 | TODO | Analyze command (Moran's I, reconstruction metrics) |
-| 4 | TODO | Figures command (publication plots) |
-
-## Future Work
-
-- [ ] Implement Stages 1-4 (see SLIDESEQ_PNMF_PLANNING.md)
-- [ ] Add more dataset loaders (Stereo-seq, MERFISH, etc.)
-- [ ] Create analysis notebooks for each dataset
-- [ ] Add visualization utilities
-- [ ] Benchmark scripts
+---
 
 ## CLI Usage
 
@@ -236,38 +198,65 @@ See [SLIDESEQ_PNMF_PLANNING.md](./SLIDESEQ_PNMF_PLANNING.md) for the detailed 4-
 pip install -e .
 
 # Four-stage pipeline
-spatial_factorization preprocess -c configs/slideseq/pnmf.yaml  # Run once
-spatial_factorization train      -c configs/slideseq/pnmf.yaml
-spatial_factorization analyze    -c configs/slideseq/pnmf.yaml
-spatial_factorization figures    -c configs/slideseq/pnmf.yaml
+spatial_factorization preprocess -c configs/slideseq/pnmf.yaml      # Run once per dataset
+spatial_factorization train      -c configs/slideseq/svgp_test.yaml  # Model-specific
+spatial_factorization analyze    -c configs/slideseq/svgp_test.yaml
+spatial_factorization figures    -c configs/slideseq/svgp_test.yaml
 ```
 
-## Python API Example
+## Available Configs
 
-```python
-import torch
-from spatial_factorization import Config, load_dataset
-from PNMF import PNMF
+| Config | Model | Groups | Epochs | Use |
+|--------|-------|--------|--------|-----|
+| `pnmf.yaml` | Non-spatial PNMF | N/A | 10000 | Baseline |
+| `svgp.yaml` | MGGP_SVGP | true | 10000 | Full training |
+| `svgp_test.yaml` | MGGP_SVGP | true | 10 | Quick testing |
+| `svgp_no_groups_test.yaml` | SVGP | false | 10 | Quick testing |
 
-# Load config
-config = Config.from_yaml("configs/slideseq/pnmf.yaml")
-torch.manual_seed(config.seed)
+---
 
-# Load data
-data = load_dataset(config.dataset)
-print(f"Loaded {data.n_spots} spots, {data.n_genes} genes")
+## Implementation Status
 
-# Fit model
-model = PNMF(
-    n_components=config.model.n_components,
-    mode=config.model.mode,
-    max_iter=config.training.max_iter,
-    learning_rate=config.training.learning_rate,
-    verbose=config.training.verbose,
-)
+| Stage | Status | Description |
+|-------|--------|-------------|
+| 0 | **DONE** | Setup & Installation |
+| 1 | **DONE** | Preprocess command |
+| 2 | **DONE** | Train command (PNMF, SVGP, MGGP_SVGP) |
+| 3 | **DONE** | Analyze command (Moran's I, reconstruction, group loadings, enrichment) |
+| 4 | **DONE** | Figures command (spatial plots, enrichment, gene plots) |
 
-# PNMF expects (n_samples, n_features), SpatialData has (D, N)
-Y_sklearn = data.Y.T.numpy()  # (N, D)
-model.fit(Y_sklearn)
-print(f"ELBO: {model.elbo_}")
+## Relationship to Other Repos
+
+| Repo | Purpose | Key Classes |
+|------|---------|-------------|
+| **GPzoo** | GP backends | `SVGP`, `MGGP_SVGP`, `batched_Matern32`, `batched_MGGP_Matern32`, `CholeskyParameter` |
+| **PNMF** | sklearn API | `PNMF` class, `multigroup` param, `spatial=True`, transforms (`get_factors`, `_get_spatial_qF`, `transform_W`) |
+| **Spatial-Factorization** | Pipeline | Dataset loaders, configs, CLI commands, analysis, figures |
+
+### PNMF Recent Changes (no-groups branch)
+
+- `multigroup` default changed from `True` to `False`
+- Non-multigroup path uses K-means inducing points (not random)
+- Non-multigroup uses `batched_Matern32` kernel + `SVGP` class
+
+---
+
+## Dependencies
+
+```bash
+# Core
+pip install -e .                          # This package
+pip install -e ../Probabilistic-NMF       # PNMF
+pip install -e ../GPzoo                   # GP backends
+
+# Or via helper script
+./scripts/install_deps.sh
 ```
+
+## Running Tests
+
+```bash
+conda run -n factorization python -m pytest tests/ -v -s
+```
+
+Tests in `test_svgp_model.py` require a trained MGGP_SVGP model at `outputs/slideseq/MGGP_SVGP/`.

@@ -14,7 +14,7 @@ import pytest
 import torch
 
 OUTPUT_DIR = Path("outputs/slideseq")
-MODEL_DIR = OUTPUT_DIR / "svgp"
+MODEL_DIR = OUTPUT_DIR / "MGGP_SVGP"
 PREP_DIR = OUTPUT_DIR / "preprocessed"
 
 

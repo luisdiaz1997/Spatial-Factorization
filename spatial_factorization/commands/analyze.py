@@ -72,32 +72,49 @@ def _load_model(model_dir: Path):
     )
 
     if is_spatial:
-        # Reconstruct the MGGP_SVGP prior directly from saved state
+        # Reconstruct spatial prior from saved state
         import torch.nn as nn
-        from gpzoo.gp import MGGP_SVGP
-        from gpzoo.kernels import batched_MGGP_Matern32
         from gpzoo.modules import CholeskyParameter
 
         prior_sd = state["prior_state_dict"]
         Z = prior_sd["Z"]                  # (M, 2)
-        groupsZ = prior_sd["groupsZ"]      # (M,)
         mu = prior_sd["mu"]                # (L, M)
         M = Z.shape[0]
         L = mu.shape[0]
         dim = Z.shape[1]
-        n_groups = int(groupsZ.max().item()) + 1
 
-        # Reconstruct kernel (state dict will overwrite params)
-        kernel = batched_MGGP_Matern32(
-            sigma=1.0, lengthscale=1.0,
-            group_diff_param=10.0, n_groups=n_groups,
-        )
+        # Detect multigroup vs standard SVGP from state dict
+        is_multigroup = "groupsZ" in prior_sd
+        if is_multigroup is None:
+            # Fallback: check hyperparameters
+            is_multigroup = hyperparams.get("multigroup", False)
 
-        # Reconstruct GP prior
-        gp = MGGP_SVGP(
-            kernel, dim=dim, M=M, n_groups=n_groups,
-            jitter=1e-5, cholesky_mode="exp", diagonal_only=False,
-        )
+        if is_multigroup:
+            from gpzoo.gp import MGGP_SVGP
+            from gpzoo.kernels import batched_MGGP_Matern32
+
+            groupsZ = prior_sd["groupsZ"]      # (M,)
+            n_groups = int(groupsZ.max().item()) + 1
+
+            kernel = batched_MGGP_Matern32(
+                sigma=1.0, lengthscale=1.0,
+                group_diff_param=10.0, n_groups=n_groups,
+            )
+            gp = MGGP_SVGP(
+                kernel, dim=dim, M=M, n_groups=n_groups,
+                jitter=1e-5, cholesky_mode="exp", diagonal_only=False,
+            )
+        else:
+            from gpzoo.gp import SVGP
+            from gpzoo.kernels import batched_Matern32
+
+            kernel = batched_Matern32(
+                sigma=1.0, lengthscale=1.0,
+            )
+            gp = SVGP(
+                kernel, dim=dim, M=M,
+                jitter=1e-5, cholesky_mode="exp", diagonal_only=False,
+            )
 
         # Replace mu and Lu with correct batched shapes (L, M) and (L, M, M)
         del gp.Lu
@@ -109,7 +126,6 @@ def _load_model(model_dir: Path):
         model._prior = gp
 
         # Reconstruct PoissonFactorization with a dummy y (only shape matters)
-        # D = n_features (from components), N is not used beyond shape
         model_sd = state["model_state_dict"]
         D = n_features
         dummy_y = torch.empty(D, 1)
@@ -475,10 +491,7 @@ def run(config_path: str):
     output_dir = Path(config.output_dir)
 
     # Determine model directory
-    spatial = config.model.get("spatial", False)
-    prior = config.model.get("prior", "GaussianPrior")
-    model_name = prior.lower() if spatial else "pnmf"
-    model_dir = output_dir / model_name
+    model_dir = output_dir / config.model_name
 
     # Load preprocessed data
     print(f"Loading preprocessed data from: {output_dir}/preprocessed/")
@@ -490,10 +503,12 @@ def run(config_path: str):
     model = _load_model(model_dir)
     _print_model_summary(model)
 
-    # Extract factors (for spatial models, pass coordinates and groups)
+    # Extract factors (for spatial models, pass coordinates and optionally groups)
+    spatial = config.spatial
+    use_groups = config.groups
     print("Extracting factors...")
     coords = data.X.numpy()
-    groups = data.groups.numpy() if data.groups is not None else None
+    groups = data.groups.numpy() if (data.groups is not None and use_groups) else None
 
     if spatial:
         # For spatial models, call GP forward pass ONCE to get both factors and scales
@@ -530,9 +545,9 @@ def run(config_path: str):
         poisson_dev = _compute_poisson_deviance(model, data.Y.numpy())
     print(f"  Poisson deviance (mean): {poisson_dev['mean']:.4f}")
 
-    # Compute group-specific loadings if groups exist
+    # Compute group-specific loadings if groups are enabled and available
     group_loadings_result = None
-    if data.groups is not None and data.n_groups > 1:
+    if use_groups and data.groups is not None and data.n_groups > 1:
         print(f"\nComputing group-specific loadings for {data.n_groups} groups...")
         if spatial:
             group_loadings_result = _compute_group_loadings(
@@ -570,11 +585,14 @@ def run(config_path: str):
         Lu_constrained = gp.Lu.data  # (L, M, M) constrained Cholesky
         sd = gp.state_dict()
         Z = sd["Z"]                  # (M, 2) inducing locations
-        groupsZ = sd["groupsZ"]      # (M,) inducing point group assignments
         _torch.save(Lu_constrained, model_dir / "Lu.pt")
         np.save(model_dir / "Z.npy", Z.detach().cpu().numpy())
-        np.save(model_dir / "groupsZ.npy", groupsZ.detach().cpu().numpy())
-        print(f"  Saved inducing-point data: Lu {tuple(Lu_constrained.shape)}, Z {tuple(Z.shape)}, groupsZ {tuple(groupsZ.shape)}")
+        msg = f"  Saved inducing-point data: Lu {tuple(Lu_constrained.shape)}, Z {tuple(Z.shape)}"
+        if "groupsZ" in sd:
+            groupsZ = sd["groupsZ"]  # (M,) inducing point group assignments
+            np.save(model_dir / "groupsZ.npy", groupsZ.detach().cpu().numpy())
+            msg += f", groupsZ {tuple(groupsZ.shape)}"
+        print(msg)
 
     # Save group-specific loadings and compute gene enrichment
     gene_enrichment = None
