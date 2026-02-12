@@ -182,7 +182,11 @@ This package does NOT implement models or training loops. It provides:
 - `groupsZ` present → reconstruct `MGGP_SVGP` + `batched_MGGP_Matern32`
 - `groupsZ` absent → reconstruct `SVGP` + `batched_Matern32`
 
-### 4. Groups vs No-Groups Pipeline Behavior
+### 4. Factor Ordering by Moran's I
+
+The analyze stage reorders all factor-related outputs by descending Moran's I before saving. Factor 0 always has the highest spatial autocorrelation. This applies to: `factors.npy`, `scales.npy`, `loadings.npy`, `Lu.pt`, group loadings, and gene enrichment. The `moran_i.csv` reflects the new order (already sorted descending).
+
+### 5. Groups vs No-Groups Pipeline Behavior
 
 When `groups: false`:
 - **train**: Only passes `coordinates` to `model.fit()` (no `groups` arg)

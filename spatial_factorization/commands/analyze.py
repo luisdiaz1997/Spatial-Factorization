@@ -520,8 +520,7 @@ def run(config_path: str):
         scales = qF.scale.detach().cpu().T.numpy()  # standard deviation
     else:
         factors = get_factors(model, use_mgf=False)  # (N, L) - exp(μ)
-        # Scales will be computed later for non-spatial (only if needed)
-        scales = None
+        scales = factor_uncertainty(model, return_variance=False)  # (N, L)
     print(f"  Factors shape: {factors.shape}")
 
     # Compute Moran's I for spatial autocorrelation
@@ -562,16 +561,21 @@ def run(config_path: str):
             group_name = data.group_names[g] if data.group_names else f"Group {g}"
             print(f"    {group_name}: {err:.4f}")
 
+    # Reorder factors by Moran's I (descending) so factor 0 has highest spatial autocorrelation
+    print("\nReordering factors by Moran's I (descending)...")
+    sort_order = moran_idx
+    factors = factors[:, sort_order]
+    scales = scales[:, sort_order]
+    model.components_ = model.components_[sort_order, :]
+    if group_loadings_result is not None:
+        for g in group_loadings_result["loadings"]:
+            group_loadings_result["loadings"][g] = group_loadings_result["loadings"][g][:, sort_order]
+    print(f"  Factor order (by Moran's I): {sort_order.tolist()}")
+
     # Save factors
     np.save(model_dir / "factors.npy", factors)
 
-    # Save factor uncertainty (scales) - represents uncertainty in latent factors
-    print("Extracting factor uncertainty (scales)...")
-    if spatial:
-        # Already computed above via _get_spatial_qF - no need to recompute
-        print("  Using previously computed scales from GP forward pass")
-    else:
-        scales = factor_uncertainty(model, return_variance=False)
+    # Save factor uncertainty (scales) - already computed and reordered above
     np.save(model_dir / "scales.npy", scales)
     print(f"  Scales shape: {scales.shape}, mean: {scales.mean():.4f}")
 
@@ -582,7 +586,7 @@ def run(config_path: str):
     if spatial:
         import torch as _torch
         gp = model._prior
-        Lu_constrained = gp.Lu.data  # (L, M, M) constrained Cholesky
+        Lu_constrained = gp.Lu.data[sort_order, :, :]  # (L, M, M) reordered by Moran's I
         sd = gp.state_dict()
         Z = sd["Z"]                  # (M, 2) inducing locations
         _torch.save(Lu_constrained, model_dir / "Lu.pt")
@@ -617,7 +621,7 @@ def run(config_path: str):
 
     # Save Moran's I results
     moran_df = pd.DataFrame({
-        "factor_idx": moran_idx,
+        "factor_idx": np.arange(len(moran_values)),
         "moran_i": moran_values,
     })
     moran_df.to_csv(model_dir / "moran_i.csv", index=False)
