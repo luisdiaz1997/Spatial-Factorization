@@ -286,7 +286,8 @@ def _compute_poisson_deviance(model, Y: np.ndarray, coordinates=None, groups=Non
 
 
 def _compute_group_loadings(
-    model, Y: np.ndarray, groups: np.ndarray, coordinates=None, max_iter: int = 1000, verbose: bool = False
+    model, Y: np.ndarray, groups: np.ndarray, coordinates=None, gp_groups=None,
+    max_iter: int = 1000, verbose: bool = False,
 ) -> dict:
     """Compute group-specific loadings using PNMF's transform_W.
 
@@ -298,8 +299,10 @@ def _compute_group_loadings(
     Args:
         model: Fitted PNMF model
         Y: Count matrix (N, D)
-        groups: Group labels (N,)
+        groups: Group labels (N,) for subsetting data by cell-type
         coordinates: Spatial coordinates (for spatial models)
+        gp_groups: Group labels for GP conditioning (only for multigroup models).
+            Pass None for non-multigroup spatial models (SVGP without groups).
         max_iter: Maximum iterations for transform_W optimization
         verbose: Whether to show progress
 
@@ -310,7 +313,7 @@ def _compute_group_loadings(
     """
     # Get exp-space latent factors (N, L)
     if coordinates is not None:
-        F = get_factors(model, use_mgf=False, coordinates=coordinates, groups=groups)
+        F = get_factors(model, use_mgf=False, coordinates=coordinates, groups=gp_groups)
     else:
         F = get_factors(model, use_mgf=False)  # (N, L) - exp(μ)
     L = F.shape[1]
@@ -544,17 +547,21 @@ def run(config_path: str):
         poisson_dev = _compute_poisson_deviance(model, data.Y.numpy())
     print(f"  Poisson deviance (mean): {poisson_dev['mean']:.4f}")
 
-    # Compute group-specific loadings if groups are enabled and available
+    # Compute group-specific loadings whenever data has groups
+    # (works for all models: MGGP_SVGP, SVGP, and PNMF)
     group_loadings_result = None
-    if use_groups and data.groups is not None and data.n_groups > 1:
+    if data.groups is not None and data.n_groups > 1:
         print(f"\nComputing group-specific loadings for {data.n_groups} groups...")
+        # gp_groups: only pass to GP forward pass for multigroup models
+        gp_groups = data.groups.numpy() if use_groups else None
         if spatial:
             group_loadings_result = _compute_group_loadings(
-                model, data.Y.numpy(), data.groups.numpy(), coordinates=coords, verbose=True
+                model, data.Y.numpy(), data.groups.numpy(),
+                coordinates=coords, gp_groups=gp_groups, verbose=True,
             )
         else:
             group_loadings_result = _compute_group_loadings(
-                model, data.Y.numpy(), data.groups.numpy(), verbose=True
+                model, data.Y.numpy(), data.groups.numpy(), verbose=True,
             )
         print(f"  Group reconstruction errors:")
         for g, err in group_loadings_result["reconstruction_error"].items():

@@ -3,7 +3,7 @@
 Generates:
 - factors_spatial.png: Spatial factor visualization (sorted by Moran's I)
 - scales_spatial.png: Spatial factor uncertainty visualization (sigma values)
-- groups.png: Group spatial map (data + inducing groups side-by-side)
+- points.png: Group spatial map (+ inducing points for spatial models)
 - elbo_curve.png: Training ELBO convergence
 - top_genes.png: Top genes per factor by loading magnitude
 - factors_with_genes.png: Factors alongside top gene expression (like GPzoo notebooks)
@@ -413,8 +413,9 @@ def plot_top_enriched_depleted_genes(
         top_enriched = [(e["gene"], e["lfc"]) for e in group_data["top_enriched"][:n_top]]
         top_depleted = [(e["gene"], e["lfc"]) for e in group_data["top_depleted"][:n_top]]
 
-        # Combine: enriched on top, depleted on bottom
-        combined = top_enriched + top_depleted
+        # Combine: enriched on top (descending), depleted on bottom (ascending magnitude)
+        # Reverse depleted so it reads: ..., -1, -2, -3 from top to bottom
+        combined = top_enriched + top_depleted[::-1]
         genes = [g for g, _ in combined]
         values = [v for _, v in combined]
 
@@ -751,7 +752,8 @@ def plot_groups(
     Returns:
         matplotlib Figure
     """
-    has_inducing = Z is not None and groupsZ is not None
+    has_inducing_groups = Z is not None and groupsZ is not None
+    has_inducing_points = Z is not None
     n_groups = len(group_names)
 
     # Use a categorical colormap
@@ -763,10 +765,10 @@ def plot_groups(
         cmap = plt.cm.gist_ncar
     colors = [cmap(i / max(n_groups - 1, 1)) for i in range(n_groups)]
 
-    ncols = 2 if has_inducing else 1
+    ncols = 2 if has_inducing_points else 1
     fig, axes = plt.subplots(
         1, ncols,
-        figsize=figsize if has_inducing else (figsize[0] / 2 + 2, figsize[1]),
+        figsize=figsize if has_inducing_points else (figsize[0] / 2 + 2, figsize[1]),
         squeeze=False,
     )
 
@@ -785,8 +787,9 @@ def plot_groups(
     ax_data.set_facecolor("gray")
     ax_data.set_title("Cell Types (data)", fontsize=12)
 
-    # --- Right subplot: inducing-point groups ---
-    if has_inducing:
+    # --- Right subplot: inducing points ---
+    if has_inducing_groups:
+        # MGGP models: color inducing points by group assignment
         ax_ind = axes[0, 1]
         for g in range(n_groups):
             mask = groupsZ == g
@@ -801,6 +804,18 @@ def plot_groups(
         ax_ind.set_yticks([])
         ax_ind.set_facecolor("gray")
         ax_ind.set_title("Cell Types (inducing points)", fontsize=12)
+    elif has_inducing_points:
+        # Non-group spatial models: show inducing point distribution
+        ax_ind = axes[0, 1]
+        ax_ind.scatter(
+            Z[:, 0], Z[:, 1],
+            c="steelblue", s=s_inducing, alpha=alpha, rasterized=True,
+        )
+        ax_ind.invert_yaxis()
+        ax_ind.set_xticks([])
+        ax_ind.set_yticks([])
+        ax_ind.set_facecolor("gray")
+        ax_ind.set_title(f"Inducing Points (M={Z.shape[0]})", fontsize=12)
 
     # --- Shared legend on the right, outside the subplots ---
     handles, labels = axes[0, 0].get_legend_handles_labels()
@@ -890,7 +905,7 @@ def run(config_path: str):
     Output files (outputs/{dataset}/{model}/figures/):
         factors_spatial.png       - Spatial factor visualization (sorted by Moran's I)
         scales_spatial.png        - Factor uncertainty (sigma) spatial visualization
-        groups.png               - Cell-type spatial map (data + inducing groups)
+        points.png               - Cell-type spatial map (+ inducing points for spatial models)
         elbo_curve.png            - Training convergence
         top_genes.png             - Top genes per factor (bar chart)
         factors_with_genes.png    - Factors + top gene expression (spatial, like GPzoo)
@@ -971,24 +986,26 @@ def run(config_path: str):
         plt.close(fig)
         print(f"  Saved: {figures_dir}/lu_scales_inducing.png")
 
-    # 1d. Cell-type spatial plot (data groups + inducing groups side-by-side)
+    # 1d. Cell-type spatial plot (data groups + inducing points side-by-side)
     if data.groups is not None:
-        print("Generating groups plot...")
         groups_np = data.groups.numpy()
-        # Load inducing-point group assignments if available
+        # Load inducing-point data if available
         groupsz_path = model_dir / "groupsZ.npy"
         Z_celltype = None
         groupsZ_celltype = None
-        if spatial and z_path.exists() and groupsz_path.exists():
+        if spatial and z_path.exists():
             Z_celltype = np.load(z_path)
-            groupsZ_celltype = np.load(groupsz_path)
+            if groupsz_path.exists():
+                groupsZ_celltype = np.load(groupsz_path)
         fig = plot_groups(
             coords, groups_np, group_names,
             Z=Z_celltype, groupsZ=groupsZ_celltype,
         )
-        fig.savefig(figures_dir / "groups.png", dpi=150, bbox_inches="tight")
+        plot_name = "points.png"
+        print(f"Generating {plot_name}...")
+        fig.savefig(figures_dir / plot_name, dpi=150, bbox_inches="tight")
         plt.close(fig)
-        print(f"  Saved: {figures_dir}/groups.png")
+        print(f"  Saved: {figures_dir}/{plot_name}")
 
     # 2. ELBO curve
     if elbo_history is not None:

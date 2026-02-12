@@ -120,7 +120,7 @@ outputs/slideseq/
 │       ├── factors_spatial.png
 │       ├── scales_spatial.png
 │       ├── lu_scales_inducing.png
-│       ├── groups.png
+│       ├── points.png
 │       ├── elbo_curve.png
 │       ├── top_genes.png
 │       ├── factors_with_genes.png
@@ -132,10 +132,16 @@ outputs/slideseq/
     ├── model.pth            # (pickle also works for non-MGGP)
     ├── model.pkl
     ├── factors.npy, scales.npy, loadings.npy
+    ├── loadings_group_*.npy # (D, L) per-group loadings (computed post-hoc)
     ├── Z.npy, Lu.pt         # Inducing data (NO groupsZ)
-    ├── moran_i.csv          # (NO gene_enrichment, NO group loadings)
+    ├── moran_i.csv
+    ├── gene_enrichment.json # LFC per factor per group (computed post-hoc)
     ├── metrics.json
-    └── figures/              # (NO enrichment or group plots)
+    └── figures/
+        ├── points.png       # Data groups + inducing points (no group assignment)
+        ├── gene_enrichment.png
+        ├── enrichment_factor_*.png
+        └── enrichment_by_group/
 ```
 
 ---
@@ -190,8 +196,13 @@ The analyze stage reorders all factor-related outputs by descending Moran's I be
 
 When `groups: false`:
 - **train**: Only passes `coordinates` to `model.fit()` (no `groups` arg)
-- **analyze**: Skips group-specific loadings, gene enrichment, groupsZ saving
-- **figures**: Skips enrichment plots, group plots still show data groups (from C.npy) but no inducing groups
+- **analyze**: Computes group-specific loadings and gene enrichment post-hoc (using data groups from C.npy); skips groupsZ saving
+- **figures**: Generates all enrichment plots; `points.png` shows data groups + inducing points (no group coloring)
+
+When `groups: true`:
+- **train**: Passes both `coordinates` and `groups` to `model.fit()`
+- **analyze**: Computes group-specific loadings and gene enrichment; saves groupsZ.npy
+- **figures**: Generates all enrichment plots; `points.png` shows data groups + inducing points colored by group
 
 ---
 
