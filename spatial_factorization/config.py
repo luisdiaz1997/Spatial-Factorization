@@ -109,7 +109,7 @@ class Config:
         # Spatial params (SVGP, VNNGP, LCGP)
         if self.model.get("spatial", False):
             kwargs["spatial"] = True
-            kwargs["prior"] = self.model.get("prior", "SVGP")
+            # Note: prior is NOT passed to PNMF - it auto-selects based on spatial/multigroup/local
             kwargs["kernel"] = self.model.get("kernel", "Matern32")
             kwargs["multigroup"] = self.model.get("groups", False)
             kwargs["num_inducing"] = self.model.get("num_inducing", 3000)

@@ -62,13 +62,14 @@ def _load_model(model_dir: Path):
     loadings_mode = hyperparams.get("loadings_mode", "projected")
 
     # Create the PNMF wrapper (holds sklearn-like attributes)
+    # Note: PNMF auto-selects prior based on spatial/multigroup/local flags
     model = PNMF(
         n_components=n_components,
         mode=mode,
         loadings_mode=loadings_mode,
         random_state=hyperparams.get("random_state", 0),
         spatial=is_spatial,
-        prior=hyperparams.get("prior", "SVGP") if is_spatial else "GaussianPrior",
+        multigroup=hyperparams.get("multigroup", False) if is_spatial else False,
     )
 
     if is_spatial:

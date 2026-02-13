@@ -165,14 +165,14 @@ config = Config.from_yaml("configs/slideseq/svgp_test.yaml")
 
 config.spatial      # bool: model.spatial (default False)
 config.groups       # bool: model.groups (default False)
-config.prior        # str: model.prior (e.g., "SVGP")
+config.prior        # str: model.prior (used for output dir naming, not passed to PNMF)
 config.model_name   # str: "pnmf" | "svgp" | "mggp_svgp" (used for output dir)
-config.to_pnmf_kwargs()  # dict: merged model+training kwargs for PNMF constructor
+config.to_pnmf_kwargs()  # dict: merged model+training kwargs for PNMF constructor (no prior)
 ```
 
 The `groups` config field maps to PNMF's `multigroup` parameter:
-- `groups: true` → `multigroup=True` → uses `MGGP_SVGP` + `batched_MGGP_Matern32`
-- `groups: false` → `multigroup=False` → uses `SVGP` + `batched_Matern32` + K-means inducing points
+- `groups: true` → `multigroup=True` → PNMF uses `MGGP_SVGP` + `batched_MGGP_Matern32`
+- `groups: false` → `multigroup=False` → PNMF uses `SVGP` + `batched_Matern32` + K-means inducing points
 
 ---
 
@@ -194,11 +194,21 @@ This package does NOT implement models or training loops. It provides:
 | **SVGP** | `spatial=True, multigroup=False` | `SVGP`, `batched_Matern32` | No |
 | **pnmf** | `spatial=False` | None (GaussianPrior) | No |
 
-### 3. Model Loading in analyze.py
+### 3. Prior Selection and Model Loading
 
-`_load_model()` detects MGGP vs SVGP by checking if `groupsZ` exists in the prior state dict:
+**Training:** The `prior` field in YAML is NOT passed to PNMF. PNMF auto-selects the prior based on `spatial`, `multigroup`, and `local` flags:
+- `spatial=False` → `GaussianPrior`
+- `spatial=True, multigroup=False` → `SVGP`
+- `spatial=True, multigroup=True` → `MGGP_SVGP`
+
+**Loading:** `_load_model()` detects MGGP vs SVGP by checking if `groupsZ` exists in the saved state dict:
 - `groupsZ` present → reconstruct `MGGP_SVGP` + `batched_MGGP_Matern32`
 - `groupsZ` absent → reconstruct `SVGP` + `batched_Matern32`
+
+The `prior` field in YAML/config is only used for:
+- Naming output directories (`model_name` property)
+- Print statements during training
+- Saved to `model.pth` hyperparameters for documentation
 
 ### 4. Factor Ordering by Moran's I
 
