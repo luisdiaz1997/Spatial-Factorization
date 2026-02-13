@@ -53,25 +53,30 @@ All stages are **implemented and working**.
 Spatial-Factorization/
 ├── spatial_factorization/
 │   ├── __init__.py
-│   ├── config.py               # Config dataclass with model_name, groups, spatial properties
-│   ├── cli.py                  # Click CLI entry point
+│   ├── __main__.py            # Enables `python -m spatial_factorization`
+│   ├── config.py              # Config dataclass with model_name, groups, spatial properties
+│   ├── cli.py                 # Click CLI entry point
+│   ├── generate.py            # Generate per-model configs from general.yaml
+│   ├── runner.py              # Parallel job runner with GPU/CPU resource management
+│   ├── status.py              # Live status display for parallel training (rich)
 │   ├── commands/
-│   │   ├── preprocess.py       # Stage 1: Standardize data format
-│   │   ├── train.py            # Stage 2: Train PNMF model
-│   │   ├── analyze.py          # Stage 3: Compute metrics, factors, loadings
-│   │   └── figures.py          # Stage 4: Generate plots
+│   │   ├── preprocess.py      # Stage 1: Standardize data format
+│   │   ├── train.py           # Stage 2: Train PNMF model
+│   │   ├── analyze.py         # Stage 3: Compute metrics, factors, loadings
+│   │   └── figures.py         # Stage 4: Generate plots
 │   └── datasets/
-│       ├── base.py             # SpatialData container + load_preprocessed()
-│       ├── slideseq.py         # SlideseqV2 loader
-│       └── tenxvisium.py       # 10x Visium loader
+│       ├── base.py            # SpatialData container + load_preprocessed()
+│       ├── slideseq.py        # SlideseqV2 loader
+│       └── tenxvisium.py      # 10x Visium loader
 ├── configs/slideseq/
-│   ├── pnmf.yaml               # Non-spatial baseline
-│   ├── svgp.yaml                # MGGP_SVGP (full training)
-│   ├── svgp_test.yaml           # MGGP_SVGP (10 epochs, testing)
+│   ├── general.yaml           # Superset config for multiplex training
+│   ├── pnmf.yaml              # Non-spatial baseline
+│   ├── svgp.yaml              # MGGP_SVGP (full training)
+│   ├── svgp_test.yaml         # MGGP_SVGP (10 epochs, testing)
 │   └── svgp_no_groups_test.yaml # SVGP no groups (10 epochs, testing)
 ├── tests/
-│   └── test_svgp_model.py       # SVGP model inspection tests
-├── outputs/                     # Generated (git-ignored)
+│   └── test_svgp_model.py     # SVGP model inspection tests
+├── outputs/                   # Generated (git-ignored)
 ├── setup.py
 ├── pyproject.toml
 └── CLAUDE.md
@@ -86,10 +91,10 @@ Model output directories are determined by `config.model_name`:
 | Config | `model_name` | Directory |
 |--------|-------------|-----------|
 | `spatial: false` | `pnmf` | `outputs/slideseq/pnmf/` |
-| `spatial: true, groups: false` | `SVGP` | `outputs/slideseq/SVGP/` |
-| `spatial: true, groups: true` | `MGGP_SVGP` | `outputs/slideseq/MGGP_SVGP/` |
+| `spatial: true, groups: false` | `svgp` | `outputs/slideseq/svgp/` |
+| `spatial: true, groups: true` | `mggp_svgp` | `outputs/slideseq/mggp_svgp/` |
 
-The naming uses the prior name directly (uppercase). When `groups: true`, the `MGGP_` prefix is added.
+All names are lowercase. The prior name is lowercased, and when `groups: true`, the `mggp_` prefix is added.
 
 ### Output Directory Structure
 
@@ -101,7 +106,14 @@ outputs/slideseq/
 │   ├── C.npy               # (N,) group codes (integers 0..G-1)
 │   └── metadata.json       # gene_names, group_names, etc.
 │
-├── MGGP_SVGP/              # groups=true output
+├── logs/                   # Multiplex training logs
+│   ├── pnmf.log            # stdout/stderr from pnmf training
+│   ├── svgp.log            # stdout/stderr from SVGP training
+│   └── mggp_svgp.log       # stdout/stderr from MGGP_SVGP training
+│
+├── run_status.json         # Multiplex run summary (JSON)
+│
+├── mggp_svgp/              # groups=true output
 │   ├── model.pth            # PyTorch state dict
 │   ├── training.json        # Metadata
 │   ├── elbo_history.csv     # ELBO convergence
@@ -128,7 +140,7 @@ outputs/slideseq/
 │       ├── enrichment_factor_*.png
 │       └── enrichment_by_group/
 │
-└── SVGP/                   # groups=false output
+└── svgp/                   # groups=false output
     ├── model.pth            # (pickle also works for non-MGGP)
     ├── model.pkl
     ├── factors.npy, scales.npy, loadings.npy
@@ -154,7 +166,7 @@ config = Config.from_yaml("configs/slideseq/svgp_test.yaml")
 config.spatial      # bool: model.spatial (default False)
 config.groups       # bool: model.groups (default False)
 config.prior        # str: model.prior (e.g., "SVGP")
-config.model_name   # str: "pnmf" | "SVGP" | "MGGP_SVGP" (used for output dir)
+config.model_name   # str: "pnmf" | "svgp" | "mggp_svgp" (used for output dir)
 config.to_pnmf_kwargs()  # dict: merged model+training kwargs for PNMF constructor
 ```
 
@@ -225,10 +237,66 @@ spatial_factorization run preprocess train analyze figures -c configs/slideseq/p
 
 Stages passed to `run` are automatically sorted into pipeline order (`preprocess → train → analyze → figures`).
 
+---
+
+## Multiplex Pipeline (Parallel Training)
+
+Run multiple models in parallel with resource-aware GPU/CPU scheduling.
+
+### Usage
+
+```bash
+# Generate per-model configs from general.yaml
+spatial_factorization generate -c configs/slideseq/general.yaml
+
+# Run all models in parallel (pnmf, SVGP, MGGP_SVGP)
+spatial_factorization run all -c configs/slideseq/general.yaml
+
+# Force re-preprocessing
+spatial_factorization run all -c configs/slideseq/general.yaml --force
+
+# Dry run (show plan without executing)
+spatial_factorization run all -c configs/slideseq/general.yaml --dry-run
+```
+
+### Live Status Display
+
+During parallel training, a live-updating table shows progress:
+
+```
+        Training Progress
+┏━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━┓
+┃ Model      ┃ Device ┃ Status ┃ Epoch      ┃ ELBO       ┃ Remaining┃ Elapsed  ┃
+┡━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━┩
+│ pnmf       │ cpu    │ running│ 5000/10000 │ -547500.0  │ 02:45    │ 0:02:34  │
+│ SVGP       │ cuda:0 │ running│ 3000/10000 │ -23456.8   │ 05:12    │ 0:01:42  │
+│ MGGP_SVGP  │ cuda:1 │ running│ 2000/10000 │ -34567.9   │ 08:30    │ 0:00:58  │
+└────────────┴────────┴────────┴────────────┴────────────┴──────────┴──────────┘
+```
+
+### Status Module (`status.py`)
+
+| Component | Purpose |
+|-----------|---------|
+| `JobStatus` | Dataclass tracking name, device, status, epoch, elbo, remaining_time, elapsed |
+| `StatusManager` | Context manager with live `rich` table display |
+| `stream_output()` | Non-blocking subprocess stdout capture with tqdm parsing |
+
+Parses both PNMF output formats:
+- `verbose=True`: `Iteration 500: ELBO = -12345.67`
+- `verbose=False` (tqdm): `5000/10000 [...ELBO=-5.475e+05, ...<02:45...]`
+
+### Resource Management (`runner.py`)
+
+- **CPU**: 16 cores per process, max 4 concurrent jobs
+- **GPU**: Virtual slot tracking (11GB budget per job), assigns GPU with most available memory
+- **Logs**: Each job writes to `outputs/{dataset}/logs/{model}.log`
+
 ## Available Configs
 
 | Config | Model | Groups | Epochs | Use |
 |--------|-------|--------|--------|-----|
+| `general.yaml` | All (generates pnmf, SVGP, MGGP_SVGP) | N/A | 20000 | Multiplex training |
 | `pnmf.yaml` | Non-spatial PNMF | N/A | 10000 | Baseline |
 | `svgp.yaml` | MGGP_SVGP | true | 10000 | Full training |
 | `svgp_test.yaml` | MGGP_SVGP | true | 10 | Quick testing |
@@ -245,6 +313,7 @@ Stages passed to `run` are automatically sorted into pipeline order (`preprocess
 | 2 | **DONE** | Train command (PNMF, SVGP, MGGP_SVGP) |
 | 3 | **DONE** | Analyze command (Moran's I, reconstruction, group loadings, enrichment) |
 | 4 | **DONE** | Figures command (spatial plots, enrichment, gene plots) |
+| 5 | **DONE** | Multiplex pipeline (parallel training, live status, GPU/CPU scheduling) |
 
 ## Relationship to Other Repos
 
@@ -280,4 +349,4 @@ pip install -e ../GPzoo                   # GP backends
 conda run -n factorization python -m pytest tests/ -v -s
 ```
 
-Tests in `test_svgp_model.py` require a trained MGGP_SVGP model at `outputs/slideseq/MGGP_SVGP/`.
+Tests in `test_svgp_model.py` require a trained mggp_svgp model at `outputs/slideseq/mggp_svgp/`.

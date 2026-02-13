@@ -1,6 +1,8 @@
-# Test config for SVGP - short training for verification
+# General config for Slide-seq V2 dataset (superset of all model params)
+# This config is used to generate per-model configs (pnmf.yaml, svgp.yaml, mggp_svgp.yaml)
+# Use: spatial_factorization generate -c configs/slideseq/general.yaml
 
-name: slideseq_svgp_test
+name: slideseq
 seed: 67
 dataset: slideseq
 output_dir: outputs/slideseq
@@ -12,24 +14,28 @@ preprocessing:
   min_cells: 10
 
 model:
+  # Common params (used by all models)
   n_components: 10
-  spatial: true
-  prior: SVGP
-  groups: true
   mode: expanded
-  loadings_mode: projected
+  loadings_mode: multiplicative
+  training_mode: standard
+  E: 3
+
+  # Spatial GP params (svgp/mggp_svgp only)
   kernel: Matern32
   num_inducing: 3000
   lengthscale: 8.0
   sigma: 1.0
-  group_diff_param: 1.0
   train_lengthscale: false
   cholesky_mode: exp
   diagonal_only: false
+
+  # MGGP params (mggp_svgp only)
+  group_diff_param: 1.0
   inducing_allocation: derived
 
 training:
-  max_iter: 20000       # Short for testing
+  max_iter: 20000
   learning_rate: 2e-3
   optimizer: Adam
   tol: 1e-4
@@ -38,3 +44,4 @@ training:
   batch_size: 7000
   y_batch_size: 2000
   shuffle: true
+

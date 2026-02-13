@@ -1,4 +1,4 @@
-name: slideseq_svgp
+name: slideseq_mggp_svgp
 seed: 67
 dataset: slideseq
 output_dir: outputs/slideseq
@@ -24,6 +24,9 @@ model:
   cholesky_mode: exp
   diagonal_only: false
   sigma: 1.0
+  groups: true
+  inducing_allocation: derived
+  group_diff_param: 1.0
 
 training:
   max_iter: 20000

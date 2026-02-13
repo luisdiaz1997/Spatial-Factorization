@@ -85,14 +85,14 @@ class Config:
         """Return model directory name based on spatial/groups config.
 
         - Non-spatial: "pnmf"
-        - Spatial, no groups: "{prior}" e.g. "SVGP"
-        - Spatial, with groups: "MGGP_{prior}" e.g. "MGGP_SVGP"
+        - Spatial, no groups: "{prior}" e.g. "svgp"
+        - Spatial, with groups: "mggp_{prior}" e.g. "mggp_svgp"
         """
         if not self.spatial:
             return "pnmf"
-        prior = self.model.get("prior", "SVGP")
+        prior = self.model.get("prior", "SVGP").lower()
         if self.groups:
-            return f"MGGP_{prior}"
+            return f"mggp_{prior}"
         return prior
 
     def to_pnmf_kwargs(self) -> Dict[str, Any]:
@@ -171,6 +171,51 @@ class Config:
         return cls.from_dict(data)
 
     def save_yaml(self, path: str | Path) -> None:
-        """Save configuration to a YAML file."""
+        """Save configuration to a YAML file with blank lines between sections."""
+        d = self.to_dict()
         with open(path, "w") as f:
-            yaml.dump(self.to_dict(), f, default_flow_style=False, sort_keys=False)
+            # Write simple fields in order
+            f.write(f"name: {d['name']}\n")
+            f.write(f"seed: {d['seed']}\n")
+            f.write(f"dataset: {d['dataset']}\n")
+            f.write(f"output_dir: {d['output_dir']}\n")
+
+            # Write sections with blank lines before each
+            for key in ["preprocessing", "model", "training"]:
+                f.write(f"\n{key}:\n")
+                # Get yaml content without trailing newline from dump
+                content = yaml.dump(d[key], default_flow_style=False, sort_keys=False)
+                # Indent each line by 2 spaces
+                for line in content.strip().split('\n'):
+                    f.write(f"  {line}\n")
+
+    @classmethod
+    def is_general_config(cls, path: str | Path) -> bool:
+        """Check if a config is a general config (no model.spatial key).
+
+        A general config is a superset of all model params and will be used
+        to generate per-model configs (pnmf.yaml, svgp.yaml, mggp_svgp.yaml).
+
+        Args:
+            path: Path to the YAML config file.
+
+        Returns:
+            True if the config is general (no model.spatial key), False otherwise.
+        """
+        with open(path) as f:
+            data = yaml.safe_load(f)
+        model_section = data.get("model", {})
+        return "spatial" not in model_section
+
+    @staticmethod
+    def preprocessed_exists(output_dir: str | Path) -> bool:
+        """Check if preprocessed data exists in the output directory.
+
+        Args:
+            output_dir: Path to the output directory.
+
+        Returns:
+            True if {output_dir}/preprocessed/Y.npz exists, False otherwise.
+        """
+        preprocessed_path = Path(output_dir) / "preprocessed" / "Y.npz"
+        return preprocessed_path.exists()
