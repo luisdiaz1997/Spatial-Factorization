@@ -208,3 +208,6 @@ __marimo__/
 
 # Project-specific outputs (preprocessed data, trained models, analysis results)
 outputs/
+
+# Data files
+data/

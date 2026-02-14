@@ -24,6 +24,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import torch
 
 from PNMF.transforms import get_factors, log_factors, transform_W, factor_uncertainty
 
@@ -32,23 +33,197 @@ from ..datasets.base import load_preprocessed
 
 
 def _load_model(model_dir: Path):
-    """Load trained PNMF model from pickle."""
-    with open(model_dir / "model.pkl", "rb") as f:
-        return pickle.load(f)
+    """Load trained PNMF model from pickle or torch state dict.
+
+    For spatial models, pickle fails due to MGGPWrapper, so we reconstruct
+    the model architecture directly from GPzoo and load the state dict.
+    """
+    # Try pickle first (works for non-spatial models)
+    pkl_path = model_dir / "model.pkl"
+    if pkl_path.exists():
+        try:
+            with open(pkl_path, "rb") as f:
+                return pickle.load(f)
+        except (AttributeError, TypeError, EOFError, pickle.PicklingError):
+            # Pickle failed (likely spatial model), load from .pth
+            pass
+
+    # Load from torch state dict and reconstruct
+    from PNMF import PNMF
+    from PNMF.models import PoissonFactorization
+
+    state = torch.load(model_dir / "model.pth", map_location="cpu", weights_only=False)
+    hyperparams = state["hyperparameters"]
+
+    is_spatial = hyperparams.get("spatial", False)
+    n_components = hyperparams["n_components"]
+    n_features = state["components"].shape[1]
+    mode = hyperparams.get("mode", "expanded")
+    loadings_mode = hyperparams.get("loadings_mode", "projected")
+
+    # Create the PNMF wrapper (holds sklearn-like attributes)
+    # Note: PNMF auto-selects prior based on spatial/multigroup/local flags
+    model = PNMF(
+        n_components=n_components,
+        mode=mode,
+        loadings_mode=loadings_mode,
+        random_state=hyperparams.get("random_state", 0),
+        spatial=is_spatial,
+        multigroup=hyperparams.get("multigroup", False) if is_spatial else False,
+    )
+
+    if is_spatial:
+        # Reconstruct spatial prior from saved state
+        import torch.nn as nn
+        from gpzoo.modules import CholeskyParameter
+
+        prior_sd = state["prior_state_dict"]
+        Z = prior_sd["Z"]                  # (M, 2)
+        mu = prior_sd["mu"]                # (L, M)
+        M = Z.shape[0]
+        L = mu.shape[0]
+        dim = Z.shape[1]
+
+        # Detect multigroup vs standard SVGP from state dict
+        is_multigroup = "groupsZ" in prior_sd
+        if is_multigroup is None:
+            # Fallback: check hyperparameters
+            is_multigroup = hyperparams.get("multigroup", False)
+
+        if is_multigroup:
+            from gpzoo.gp import MGGP_SVGP
+            from gpzoo.kernels import batched_MGGP_Matern32
+
+            groupsZ = prior_sd["groupsZ"]      # (M,)
+            n_groups = int(groupsZ.max().item()) + 1
+
+            kernel = batched_MGGP_Matern32(
+                sigma=1.0, lengthscale=1.0,
+                group_diff_param=10.0, n_groups=n_groups,
+            )
+            gp = MGGP_SVGP(
+                kernel, dim=dim, M=M, n_groups=n_groups,
+                jitter=1e-5, cholesky_mode="exp", diagonal_only=False,
+            )
+        else:
+            from gpzoo.gp import SVGP
+            from gpzoo.kernels import batched_Matern32
+
+            kernel = batched_Matern32(
+                sigma=1.0, lengthscale=1.0,
+            )
+            gp = SVGP(
+                kernel, dim=dim, M=M,
+                jitter=1e-5, cholesky_mode="exp", diagonal_only=False,
+            )
+
+        # Replace mu and Lu with correct batched shapes (L, M) and (L, M, M)
+        del gp.Lu
+        gp.Lu = CholeskyParameter((L, M), mode="exp", diagonal_only=False)
+        gp.mu = nn.Parameter(torch.randn(L, M) * 0.01)
+
+        # Load the trained prior state
+        gp.load_state_dict(prior_sd)
+        model._prior = gp
+
+        # Reconstruct PoissonFactorization with a dummy y (only shape matters)
+        model_sd = state["model_state_dict"]
+        D = n_features
+        dummy_y = torch.empty(D, 1)
+        model._model = PoissonFactorization(
+            prior=gp, y=dummy_y, L=L,
+            loadings_mode=loadings_mode, mode=mode,
+        )
+        model._model.load_state_dict(model_sd)
+    else:
+        # Non-spatial: reconstruct with GaussianPrior
+        from PNMF.priors import GaussianPrior
+
+        prior_sd = state["prior_state_dict"]
+        model_sd = state["model_state_dict"]
+
+        # Infer shapes from state dict
+        # GaussianPrior.mean is (L, N)
+        L, N = prior_sd["mean"].shape
+        D = model_sd["W.param"].shape[0]
+
+        dummy_y = torch.empty(D, N)
+        prior = GaussianPrior(y=dummy_y, L=L)
+        prior.load_state_dict(prior_sd)
+        model._prior = prior
+
+        model._model = PoissonFactorization(
+            prior=prior, y=dummy_y, L=L,
+            loadings_mode=loadings_mode, mode=mode,
+        )
+        model._model.load_state_dict(model_sd)
+
+    # Set sklearn-like attributes
+    model.components_ = state["components"]
+    model.n_components_ = n_components
+    model.n_features_in_ = n_features
+
+    return model
 
 
-def _compute_reconstruction_error(model, Y: np.ndarray) -> float:
+def _print_model_summary(model):
+    """Print summary of learned model parameters."""
+    print(f"  Components (L): {model.n_components_}")
+    print(f"  Features (D):   {model.n_features_in_}")
+
+    # Check if spatial (has a GP prior with kernel)
+    is_spatial = hasattr(model, '_prior') and hasattr(model._prior, 'kernel')
+
+    if is_spatial:
+        kernel = model._prior.kernel
+        sigma = kernel.sigma.data
+        lengthscale = kernel.lengthscale.data
+
+        # Handle scalar or batched kernel params
+        if sigma.dim() == 0:
+            print(f"  Kernel sigma:       {sigma.item():.4f}")
+        else:
+            print(f"  Kernel sigma:       {sigma.cpu().numpy()}")
+
+        if lengthscale.dim() == 0:
+            print(f"  Kernel lengthscale: {lengthscale.item():.4f}")
+        else:
+            print(f"  Kernel lengthscale: {lengthscale.cpu().numpy()}")
+
+        # Group diff parameter (MGGP kernel)
+        if hasattr(kernel, 'group_diff_param'):
+            gdp = kernel.group_diff_param.data
+            if gdp.dim() == 0:
+                print(f"  Group diff param:   {gdp.item():.4f}")
+            else:
+                print(f"  Group diff param:   {gdp.cpu().numpy()}")
+
+        # Inducing points and groups
+        sd = model._prior.state_dict()
+        if "Z" in sd:
+            print(f"  Inducing points (M): {sd['Z'].shape[0]}")
+        if "groupsZ" in sd:
+            n_groups = int(sd["groupsZ"].max().item()) + 1
+            print(f"  Groups:             {n_groups}")
+
+
+def _compute_reconstruction_error(model, Y: np.ndarray, coordinates=None, groups=None) -> float:
     """Compute relative Frobenius norm reconstruction error.
 
     Args:
         model: Fitted PNMF model
         Y: Original data (N, D)
+        coordinates: Spatial coordinates (for spatial models)
+        groups: Group labels (for spatial models)
 
     Returns:
         Relative error: ||Y - Y_hat||_F / ||Y||_F
     """
     # Get factors and loadings
-    F = get_factors(model, use_mgf=False)  # (N, L) - exp(μ)
+    if coordinates is not None:
+        F = get_factors(model, use_mgf=False, coordinates=coordinates, groups=groups)
+    else:
+        F = get_factors(model, use_mgf=False)  # (N, L) - exp(μ)
     # components_ is (L, D), so we need (N, L) @ (L, D) = (N, D)
     Y_reconstructed = F @ model.components_  # (N, L) @ (L, D) = (N, D)
 
@@ -57,7 +232,7 @@ def _compute_reconstruction_error(model, Y: np.ndarray) -> float:
     return float(error)
 
 
-def _compute_poisson_deviance(model, Y: np.ndarray) -> dict:
+def _compute_poisson_deviance(model, Y: np.ndarray, coordinates=None, groups=None) -> dict:
     """Compute Poisson deviance (KL divergence) for goodness-of-fit.
 
     D(V_true || V_reconstruct) = sum_ij (V_ij * log(V_ij / mu_ij) - V_ij + mu_ij)
@@ -67,6 +242,8 @@ def _compute_poisson_deviance(model, Y: np.ndarray) -> dict:
     Args:
         model: Fitted PNMF model
         Y: Original data (N, D)
+        coordinates: Spatial coordinates (for spatial models)
+        groups: Group labels (for spatial models)
 
     Returns:
         Dictionary with deviance metrics:
@@ -75,7 +252,10 @@ def _compute_poisson_deviance(model, Y: np.ndarray) -> dict:
         - mean_per_gene: Mean deviance per gene (averaged over spots)
     """
     # Get reconstruction
-    factors = get_factors(model, use_mgf=False)  # (N, L) - exp(μ)
+    if coordinates is not None:
+        factors = get_factors(model, use_mgf=False, coordinates=coordinates, groups=groups)
+    else:
+        factors = get_factors(model, use_mgf=False)  # (N, L) - exp(μ)
     mu = factors @ model.components_  # (N, L) @ (L, D) = (N, D)
 
     # Ensure mu > 0 for numerical stability
@@ -107,7 +287,8 @@ def _compute_poisson_deviance(model, Y: np.ndarray) -> dict:
 
 
 def _compute_group_loadings(
-    model, Y: np.ndarray, groups: np.ndarray, max_iter: int = 1000, verbose: bool = False
+    model, Y: np.ndarray, groups: np.ndarray, coordinates=None, gp_groups=None,
+    max_iter: int = 1000, verbose: bool = False,
 ) -> dict:
     """Compute group-specific loadings using PNMF's transform_W.
 
@@ -119,7 +300,10 @@ def _compute_group_loadings(
     Args:
         model: Fitted PNMF model
         Y: Count matrix (N, D)
-        groups: Group labels (N,)
+        groups: Group labels (N,) for subsetting data by cell-type
+        coordinates: Spatial coordinates (for spatial models)
+        gp_groups: Group labels for GP conditioning (only for multigroup models).
+            Pass None for non-multigroup spatial models (SVGP without groups).
         max_iter: Maximum iterations for transform_W optimization
         verbose: Whether to show progress
 
@@ -129,7 +313,10 @@ def _compute_group_loadings(
         - reconstruction_error: dict mapping group_id -> relative error
     """
     # Get exp-space latent factors (N, L)
-    F = get_factors(model, use_mgf=False)  # (N, L) - exp(μ)
+    if coordinates is not None:
+        F = get_factors(model, use_mgf=False, coordinates=coordinates, groups=gp_groups)
+    else:
+        F = get_factors(model, use_mgf=False)  # (N, L) - exp(μ)
     L = F.shape[1]
 
     # Get global loadings for fallback
@@ -308,10 +495,7 @@ def run(config_path: str):
     output_dir = Path(config.output_dir)
 
     # Determine model directory
-    spatial = config.model.get("spatial", False)
-    prior = config.model.get("prior", "GaussianPrior")
-    model_name = prior.lower() if spatial else "pnmf"
-    model_dir = output_dir / model_name
+    model_dir = output_dir / config.model_name
 
     # Load preprocessed data
     print(f"Loading preprocessed data from: {output_dir}/preprocessed/")
@@ -321,51 +505,106 @@ def run(config_path: str):
     # Load trained model
     print(f"Loading trained model from: {model_dir}/")
     model = _load_model(model_dir)
+    _print_model_summary(model)
 
-    # Extract factors
+    # Extract factors (for spatial models, pass coordinates and optionally groups)
+    spatial = config.spatial
+    use_groups = config.groups
     print("Extracting factors...")
-    factors = get_factors(model, use_mgf=False)  # (N, L) - exp(μ)
+    coords = data.X.numpy()
+    groups = data.groups.numpy() if (data.groups is not None and use_groups) else None
+
+    if spatial:
+        # For spatial models, call GP forward pass ONCE to get both factors and scales
+        from PNMF.transforms import _get_spatial_qF
+        qF = _get_spatial_qF(model, coordinates=coords, groups=groups)
+        # Extract mean (factors) and scale (uncertainty) from qF distribution
+        # qF.mean and qF.scale are shape (L, N), transpose to (N, L)
+        factors = torch.exp(qF.mean.detach().cpu()).T.numpy()  # exp-space factors
+        scales = qF.scale.detach().cpu().T.numpy()  # standard deviation
+    else:
+        factors = get_factors(model, use_mgf=False)  # (N, L) - exp(μ)
+        scales = factor_uncertainty(model, return_variance=False)  # (N, L)
     print(f"  Factors shape: {factors.shape}")
 
     # Compute Moran's I for spatial autocorrelation
     print("Computing Moran's I for spatial autocorrelation...")
-    coords = data.X.numpy()
     moran_idx, moran_values = _compute_moran_i(factors, coords)
     print(f"  Top 3 Moran's I: {moran_values[:3]}")
 
     # Compute reconstruction error
     print("Computing reconstruction error...")
-    recon_error = _compute_reconstruction_error(model, data.Y.numpy())
+    if spatial:
+        recon_error = _compute_reconstruction_error(model, data.Y.numpy(), coordinates=coords, groups=groups)
+    else:
+        recon_error = _compute_reconstruction_error(model, data.Y.numpy())
     print(f"  Reconstruction error: {recon_error:.4f}")
 
     # Compute Poisson deviance
     print("Computing Poisson deviance...")
-    poisson_dev = _compute_poisson_deviance(model, data.Y.numpy())
+    if spatial:
+        poisson_dev = _compute_poisson_deviance(model, data.Y.numpy(), coordinates=coords, groups=groups)
+    else:
+        poisson_dev = _compute_poisson_deviance(model, data.Y.numpy())
     print(f"  Poisson deviance (mean): {poisson_dev['mean']:.4f}")
 
-    # Compute group-specific loadings if groups exist
+    # Compute group-specific loadings whenever data has groups
+    # (works for all models: MGGP_SVGP, SVGP, and PNMF)
     group_loadings_result = None
     if data.groups is not None and data.n_groups > 1:
         print(f"\nComputing group-specific loadings for {data.n_groups} groups...")
-        group_loadings_result = _compute_group_loadings(
-            model, data.Y.numpy(), data.groups.numpy(), verbose=True
-        )
+        # gp_groups: only pass to GP forward pass for multigroup models
+        gp_groups = data.groups.numpy() if use_groups else None
+        if spatial:
+            group_loadings_result = _compute_group_loadings(
+                model, data.Y.numpy(), data.groups.numpy(),
+                coordinates=coords, gp_groups=gp_groups, verbose=True,
+            )
+        else:
+            group_loadings_result = _compute_group_loadings(
+                model, data.Y.numpy(), data.groups.numpy(), verbose=True,
+            )
         print(f"  Group reconstruction errors:")
         for g, err in group_loadings_result["reconstruction_error"].items():
             group_name = data.group_names[g] if data.group_names else f"Group {g}"
             print(f"    {group_name}: {err:.4f}")
 
+    # Reorder factors by Moran's I (descending) so factor 0 has highest spatial autocorrelation
+    print("\nReordering factors by Moran's I (descending)...")
+    sort_order = moran_idx
+    factors = factors[:, sort_order]
+    scales = scales[:, sort_order]
+    model.components_ = model.components_[sort_order, :]
+    if group_loadings_result is not None:
+        for g in group_loadings_result["loadings"]:
+            group_loadings_result["loadings"][g] = group_loadings_result["loadings"][g][:, sort_order]
+    print(f"  Factor order (by Moran's I): {sort_order.tolist()}")
+
     # Save factors
     np.save(model_dir / "factors.npy", factors)
 
-    # Save factor uncertainty (scales) - represents uncertainty in latent factors
-    print("Extracting factor uncertainty (scales)...")
-    scales = factor_uncertainty(model, return_variance=False)  # (N, L) - standard deviation
+    # Save factor uncertainty (scales) - already computed and reordered above
     np.save(model_dir / "scales.npy", scales)
     print(f"  Scales shape: {scales.shape}, mean: {scales.mean():.4f}")
 
     # Save global loadings
     np.save(model_dir / "loadings.npy", model.components_.T)  # (D, L)
+
+    # Save inducing-point data for spatial models (used by figures stage)
+    if spatial:
+        import torch as _torch
+        gp = model._prior
+        Lu_constrained = gp.Lu.data[sort_order, :, :]  # (L, M, M) reordered by Moran's I
+        sd = gp.state_dict()
+        Z = sd["Z"]                  # (M, 2) inducing locations
+        _torch.save(Lu_constrained, model_dir / "Lu.pt")
+        np.save(model_dir / "Z.npy", Z.detach().cpu().numpy())
+        msg = f"  Saved inducing-point data: Lu {tuple(Lu_constrained.shape)}, Z {tuple(Z.shape)}"
+        if "groupsZ" in sd:
+            groupsZ = sd["groupsZ"]  # (M,) inducing point group assignments
+            np.save(model_dir / "groupsZ.npy", groupsZ.detach().cpu().numpy())
+            msg += f", groupsZ {tuple(groupsZ.shape)}"
+        print(msg)
 
     # Save group-specific loadings and compute gene enrichment
     gene_enrichment = None
@@ -390,7 +629,7 @@ def run(config_path: str):
 
     # Save Moran's I results
     moran_df = pd.DataFrame({
-        "factor_idx": moran_idx,
+        "factor_idx": np.arange(len(moran_values)),
         "moran_i": moran_values,
     })
     moran_df.to_csv(model_dir / "moran_i.csv", index=False)

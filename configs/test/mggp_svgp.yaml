@@ -1,0 +1,31 @@
+name: test_mggp_svgp
+seed: 42
+dataset: test
+output_dir: outputs/test
+
+preprocessing:
+  spatial_scale: 50.0
+
+model:
+  E: 3
+  loadings_mode: multiplicative
+  n_components: 10
+  training_mode: standard
+  mode: expanded
+  spatial: true
+  prior: SVGP
+  lengthscale: 8.0
+  diagonal_only: false
+  kernel: Matern32
+  train_lengthscale: false
+  sigma: 1.0
+  cholesky_mode: exp
+  num_inducing: 3000
+  groups: true
+  group_diff_param: 1.0
+  inducing_allocation: derived
+
+training:
+  max_iter: 1000
+  learning_rate: 0.01
+  device: cpu

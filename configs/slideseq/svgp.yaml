@@ -1,4 +1,4 @@
-name: slideseq_pnmf
+name: slideseq_svgp
 seed: 67
 dataset: slideseq
 output_dir: outputs/slideseq
@@ -15,8 +15,15 @@ model:
   loadings_mode: multiplicative
   E: 3
   n_components: 10
-  spatial: false
-  prior: GaussianPrior
+  spatial: true
+  prior: SVGP
+  num_inducing: 3000
+  train_lengthscale: false
+  lengthscale: 8.0
+  kernel: Matern32
+  cholesky_mode: exp
+  diagonal_only: false
+  sigma: 1.0
 
 training:
   max_iter: 20000

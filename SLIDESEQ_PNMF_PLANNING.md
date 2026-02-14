@@ -94,7 +94,7 @@ outputs/
 
 ---
 
-### Stage 2: Train Command `🟩 DONE`
+### Stage 2: Train Command (PNMF, SVGP, MGGP_SVGP) `🟩 DONE`
 
 **Goal:** Train PNMF model and save results.
 
@@ -149,7 +149,7 @@ Model saved to: outputs/slideseq/pnmf/
 
 ---
 
-### Stage 3: Analyze Command `⬜ NOT DONE`
+### Stage 3: Analyze Command `🟩 DONE`
 
 **Goal:** Compute metrics (Moran's I, reconstruction error).
 
@@ -180,7 +180,7 @@ Analysis complete!
 
 ---
 
-### Stage 4: Figures Command `⬜ NOT DONE`
+### Stage 4: Figures Command `🟩 DONE`
 
 **Goal:** Generate publication figures.
 

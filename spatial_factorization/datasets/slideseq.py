@@ -8,11 +8,32 @@ import torch
 from .base import DatasetLoader, SpatialData
 
 
-def rescale_spatial_coords(X: np.ndarray) -> np.ndarray:
-    """Rescale spatial coordinates to [0, 1] range."""
-    X_min = X.min(axis=0)
-    X_max = X.max(axis=0)
-    return (X - X_min) / (X_max - X_min + 1e-8)
+def rescale_spatial_coords(X: np.ndarray, box_side: float = 4.0) -> np.ndarray:
+    """Rescale spatial coordinates (GPzoo-compatible).
+
+    Preserves aspect ratio using geometric mean, centers at zero,
+    and scales so data fits in range (-box_side/2, box_side/2).
+
+    From GPzoo: Goal is to rescale X to be similar to N(0,1) in all axes.
+    box_side=4 makes the data fit in range (-2, 2).
+
+    Parameters
+    ----------
+    X : np.ndarray
+        N x 2 matrix of spatial coordinates
+    box_side : float
+        Target box side (default: 4.0)
+
+    Returns
+    -------
+    np.ndarray
+        Rescaled coordinates centered at zero
+    """
+    xmin = X.min(axis=0)
+    X = X - xmin
+    x_gmean = np.exp(np.mean(np.log(X.max(axis=0))))
+    X = X * box_side / x_gmean
+    return X - X.mean(axis=0)
 
 
 class SlideseqLoader(DatasetLoader):
