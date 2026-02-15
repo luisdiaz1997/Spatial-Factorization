@@ -546,6 +546,59 @@ class JobRunner:
             env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
         return env
 
+    def _filter_progress_output(self, output: str) -> str:
+        """Filter tqdm progress lines, keeping only final state per bar.
+
+        Progress bars output many lines via carriage returns or newlines.
+        We keep only the final line of each progress sequence.
+
+        Handles two cases:
+        1. Carriage returns: same line updated multiple times
+        2. Newlines: each update on new line (when piped)
+        """
+        import re
+
+        # Split by both newlines and carriage returns
+        segments = re.split(r'[\n\r]+', output)
+
+        result = []
+        current_prefix = None
+        current_progress = None
+
+        for segment in segments:
+            if not segment.strip():
+                continue
+
+            # Check if this is a progress line
+            progress_match = re.search(r"^(?:(\w+(?:\s+\w+)*):\s*)?(\d+)%\|", segment)
+            iter_match = re.search(r"^(?:(\w+(?:\s+\w+)*):\s*)?(\d+)/(\d+)\s*[\[\|]", segment)
+
+            if progress_match or iter_match:
+                match = progress_match or iter_match
+                prefix = match.group(1) if match.group(1) else ""
+
+                # If prefix changed, output the previous progress bar
+                if current_prefix is not None and prefix != current_prefix:
+                    if current_progress:
+                        result.append(current_progress)
+
+                # Update current progress (overwrite to keep only latest)
+                current_progress = segment
+                current_prefix = prefix
+            else:
+                # Non-progress line: output any pending progress, then this line
+                if current_progress:
+                    result.append(current_progress)
+                    current_progress = None
+                    current_prefix = None
+                result.append(segment)
+
+        # Don't forget final progress line
+        if current_progress:
+            result.append(current_progress)
+
+        return "\n".join(result)
+
     def _run_stage(self, stage: str, config_path: Path, log_file: Optional[Path] = None) -> subprocess.CompletedProcess:
         """Run a single pipeline stage as a subprocess.
 
@@ -576,9 +629,9 @@ class JobRunner:
                 f.write(f"  Stage: {stage}\n")
                 f.write(f"{'='*60}\n\n")
                 if result.stdout:
-                    f.write(result.stdout)
+                    f.write(self._filter_progress_output(result.stdout))
                 if result.stderr:
-                    f.write(f"\n[stderr]:\n{result.stderr}")
+                    f.write(f"\n[stderr]:\n{self._filter_progress_output(result.stderr)}")
                 f.write(f"\n{'='*60}\n\n")
                 if result.returncode != 0:
                     f.write(f"[FAILED] Exit code: {result.returncode}\n")

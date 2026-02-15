@@ -152,6 +152,23 @@ class StatusManager:
         self.stop_live()
 
 
+def _is_progress_line(line: str) -> bool:
+    """Check if a line is a tqdm-style progress bar update.
+
+    Progress lines typically look like:
+    - "5000/10000 [01:23<02:45, 60.12it/s, ELBO=-5.475e+05]"
+    - "transform_W:  38%|███▊      | 385/1000 [00:03<00:05, 109.52it/s, NLL=8353034.500000]"
+    - " 10%|█         | 100/1000 [00:01<00:09, 100.00it/s]"
+    """
+    # Match tqdm patterns: N/M with bracket or pipe progress, or XX%|
+    if re.search(r"\d+/\d+\s*[\[\|]", line):
+        return True
+    # Match percentage-based progress (with optional prefix like "transform_W:")
+    if re.search(r"\d+%\|", line):
+        return True
+    return False
+
+
 def stream_output(
     proc: subprocess.Popen,
     job_name: str,
@@ -161,7 +178,8 @@ def stream_output(
     """
     Thread target: reads subprocess stdout with non-blocking I/O.
 
-    - Writes to log file
+    - Writes non-progress lines to log file immediately
+    - Buffers progress lines and writes only final state
     - Parses epoch/elbo from output
     - Updates StatusManager
     - Signals completion when stdout ends
@@ -176,6 +194,7 @@ def stream_output(
 
     with open(log_file, "w") as log_fh:
         buffer = b""
+        current_progress_line = ""  # Track current progress bar state
 
         while True:
             # Check if process has ended
@@ -206,31 +225,48 @@ def stream_output(
                 if "\r" in decoded:
                     decoded = decoded.split("\r")[-1]
 
-                log_fh.write(decoded + "\n")
-                log_fh.flush()
-
                 # Skip empty lines
                 if not decoded or decoded.isspace():
                     continue
 
-                # Parse iteration/ELBO from output
+                # Check if this is a progress line
+                if _is_progress_line(decoded):
+                    # Update current progress state (don't write yet)
+                    current_progress_line = decoded
+                else:
+                    # Non-progress line: write any buffered progress first, then this line
+                    if current_progress_line:
+                        log_fh.write(current_progress_line + "\n")
+                        log_fh.flush()
+                        current_progress_line = ""
+                    log_fh.write(decoded + "\n")
+                    log_fh.flush()
+
+                # Parse iteration/ELBO from output (for status updates)
                 _parse_and_update(decoded, job_name, manager)
 
             # Check incomplete buffer for tqdm progress (ends with \r, no \n)
             if buffer and b"\r" in buffer:
                 decoded = buffer.decode(errors="replace")
                 latest = decoded.split("\r")[-1]
+                if _is_progress_line(latest):
+                    current_progress_line = latest
                 _parse_and_update(latest, job_name, manager)
 
             # Small sleep to avoid busy-waiting
             time.sleep(0.1)
+
+        # Write any final progress line
+        if current_progress_line:
+            log_fh.write(current_progress_line + "\n")
+            log_fh.flush()
 
         # Process any remaining buffer
         if buffer:
             decoded = buffer.decode(errors="replace").rstrip()
             if "\r" in decoded:
                 decoded = decoded.split("\r")[-1]
-            if decoded and not decoded.isspace():
+            if decoded and not decoded.isspace() and not _is_progress_line(decoded):
                 log_fh.write(decoded + "\n")
                 log_fh.flush()
 

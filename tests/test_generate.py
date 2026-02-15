@@ -189,8 +189,8 @@ def test_generate_configs_from_file():
         # Generate configs
         generated = generate_configs(general_path)
 
-        # Check results
-        assert set(generated.keys()) == {"pnmf", "svgp", "mggp_svgp"}
+        # Check results - now includes LCGP variants
+        assert set(generated.keys()) == {"pnmf", "svgp", "mggp_svgp", "lcgp", "mggp_lcgp"}
 
         # Load each generated config and verify
         for name, path in generated.items():
@@ -203,11 +203,23 @@ def test_generate_configs_from_file():
             elif name == "svgp":
                 assert config.spatial is True
                 assert config.groups is False
+                assert config.local is False
                 assert config.prior == "SVGP"
             elif name == "mggp_svgp":
                 assert config.spatial is True
                 assert config.groups is True
+                assert config.local is False
                 assert config.prior == "SVGP"
+            elif name == "lcgp":
+                assert config.spatial is True
+                assert config.groups is False
+                assert config.local is True
+                assert config.prior == "LCGP"
+            elif name == "mggp_lcgp":
+                assert config.spatial is True
+                assert config.groups is True
+                assert config.local is True
+                assert config.prior == "LCGP"
 
 
 def test_generate_configs_rejects_non_general_config():
