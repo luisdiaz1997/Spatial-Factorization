@@ -10,16 +10,16 @@ preprocessing:
   min_cells: 10
 
 model:
+  loadings_mode: multiplicative
   mode: expanded
+  E: 3
   n_components: 10
   training_mode: standard
-  loadings_mode: multiplicative
-  E: 3
   spatial: false
   prior: GaussianPrior
 
 training:
-  max_iter: 10
+  max_iter: 200
   learning_rate: 2e-3
   optimizer: Adam
   tol: 1e-4

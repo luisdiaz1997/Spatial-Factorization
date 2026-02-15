@@ -76,9 +76,8 @@ class StatusManager:
         table.add_column("Device", width=8)
         table.add_column("Status", width=10)
         table.add_column("Epoch", width=12)
-        table.add_column("ELBO", width=12)
-        table.add_column("Remaining", width=10)
-        table.add_column("Elapsed", width=10)
+        table.add_column("ELBO", width=16)
+        table.add_column("Time", width=16)
 
         status_styles = {
             "pending": "dim",
@@ -100,7 +99,10 @@ class StatusManager:
 
             epoch_str = f"{job.epoch}/{job.total_epochs}" if job.total_epochs else "-"
             elbo_str = f"{job.elbo:.1f}" if job.elbo else "-"
-            remaining_str = job.remaining_time if job.remaining_time else "-"
+            # Combine elapsed/remaining into single column
+            elapsed = job.elapsed_str()
+            remaining = job.remaining_time if job.remaining_time else "-"
+            time_str = f"{elapsed}/{remaining}"
             status_str = f"[{style}]{job.status}[/{style}]" if style else job.status
 
             table.add_row(
@@ -110,8 +112,7 @@ class StatusManager:
                 status_str,
                 epoch_str,
                 elbo_str,
-                remaining_str,
-                job.elapsed_str(),
+                time_str,
             )
 
         return table

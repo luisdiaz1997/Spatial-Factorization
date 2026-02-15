@@ -10,26 +10,26 @@ preprocessing:
   min_cells: 10
 
 model:
+  loadings_mode: multiplicative
   mode: expanded
+  E: 3
   n_components: 10
   training_mode: standard
-  loadings_mode: multiplicative
-  E: 3
   spatial: true
   prior: SVGP
+  lengthscale: 8.0
   kernel: Matern32
   sigma: 1.0
-  lengthscale: 8.0
   train_lengthscale: false
-  diagonal_only: false
   num_inducing: 3000
+  diagonal_only: false
   cholesky_mode: exp
   groups: true
   inducing_allocation: derived
   group_diff_param: 1.0
 
 training:
-  max_iter: 10
+  max_iter: 200
   learning_rate: 2e-3
   optimizer: Adam
   tol: 1e-4

@@ -415,81 +415,91 @@ class JobRunner:
                         self.status_manager.update_job(f"{job.name}_train", status="completed", end_time=time.time())
 
                 # === Start analyze jobs (parallel with GPU/CPU scheduling) ===
-                for job in self.jobs:
-                    # Skip if not ready for analyze
-                    if job.name not in analyze_pending:
-                        continue
-                    if job.name not in training_done:
-                        continue
-                    if job.name in analyze_done:
-                        continue
-                    if job.name in {j.name for _, j in analyze_running.values()}:
-                        continue
+                # Priority: training jobs get first dibs on GPUs
+                # Only start analyze if no pending training jobs are waiting
+                pending_train_jobs = [j for j in self.jobs if j.status == "pending"]
+                has_free_gpu = any(g.device_id not in get_used_gpus() for g in gpus)
+                has_free_cpu = not get_cpu_in_use()
 
-                    # Skip failed jobs
-                    if job.status == "failed":
-                        analyze_pending.discard(job.name)
-                        analyze_done.add(job.name)
-                        continue
-
-                    # Determine device for analyze
-                    config = Config.from_yaml(job.config_path)
-                    use_gpu = config.training.get("device", "cpu") == "gpu" and gpus
-
-                    analyze_gpu_id = None
-                    analyze_uses_cpu = False
-                    if use_gpu:
-                        # Find free GPU (not used by training OR analyze)
-                        used_gpus = get_used_gpus()
-                        free = [g.device_id for g in gpus if g.device_id not in used_gpus]
-                        if free:
-                            analyze_gpu_id = free[0]
-                            analyze_device = f"cuda:{analyze_gpu_id}"
-                            analyze_gpu_slots.add(analyze_gpu_id)
-                            print(f"  [{job.name}] Analyzing on GPU {analyze_gpu_id}")
-                        elif not get_cpu_in_use():
-                            # CPU fallback when all GPUs busy
-                            analyze_device = "cpu"
-                            analyze_uses_cpu = True
-                            analyze_cpu_slot = True
-                            print(f"  [{job.name}] Analyzing on CPU (GPUs busy)")
-                        else:
-                            continue  # No resources available
-                    else:
-                        if not get_cpu_in_use():
-                            analyze_device = "cpu"
-                            analyze_uses_cpu = True
-                            analyze_cpu_slot = True
-                            print(f"  [{job.name}] Analyzing on CPU")
-                        else:
+                # If there are pending training jobs and resources available, skip analyze
+                if pending_train_jobs and (has_free_gpu or has_free_cpu):
+                    pass  # Let training jobs get resources first
+                else:
+                    for job in self.jobs:
+                        # Skip if not ready for analyze
+                        if job.name not in analyze_pending:
+                            continue
+                        if job.name not in training_done:
+                            continue
+                        if job.name in analyze_done:
+                            continue
+                        if job.name in {j.name for _, j in analyze_running.values()}:
                             continue
 
-                    # Store analyze device info on job
-                    job.analyze_gpu_id = analyze_gpu_id
-                    job.analyze_uses_cpu = analyze_uses_cpu
+                        # Skip failed jobs
+                        if job.status == "failed":
+                            analyze_pending.discard(job.name)
+                            analyze_done.add(job.name)
+                            continue
 
-                    # Remove from pending
-                    analyze_pending.discard(job.name)
+                        # Determine device for analyze
+                        config = Config.from_yaml(job.config_path)
+                        use_gpu = config.training.get("device", "cpu") == "gpu" and gpus
 
-                    # Update status
-                    self.status_manager.update_job(f"{job.name}_analyze", status="analyzing", device=analyze_device)
+                        analyze_gpu_id = None
+                        analyze_uses_cpu = False
+                        if use_gpu:
+                            # Find free GPU (not used by training OR analyze)
+                            used_gpus = get_used_gpus()
+                            free = [g.device_id for g in gpus if g.device_id not in used_gpus]
+                            if free:
+                                analyze_gpu_id = free[0]
+                                analyze_device = f"cuda:{analyze_gpu_id}"
+                                analyze_gpu_slots.add(analyze_gpu_id)
+                                print(f"  [{job.name}] Analyzing on GPU {analyze_gpu_id}")
+                            elif not get_cpu_in_use():
+                                # CPU fallback when all GPUs busy
+                                analyze_device = "cpu"
+                                analyze_uses_cpu = True
+                                analyze_cpu_slot = True
+                                print(f"  [{job.name}] Analyzing on CPU (GPUs busy)")
+                            else:
+                                continue  # No resources available
+                        else:
+                            if not get_cpu_in_use():
+                                analyze_device = "cpu"
+                                analyze_uses_cpu = True
+                                analyze_cpu_slot = True
+                                print(f"  [{job.name}] Analyzing on CPU")
+                            else:
+                                continue
 
-                    # Launch analyze+figures
-                    env = self._get_launch_env(analyze_gpu_id)
-                    proc = self._launch_process(["analyze", "figures"], job, env, task="analyze")
+                        # Store analyze device info on job
+                        job.analyze_gpu_id = analyze_gpu_id
+                        job.analyze_uses_cpu = analyze_uses_cpu
 
-                    if proc:
-                        analyze_running[proc.pid] = (proc, job)
-                    else:
-                        job.status = "failed"
-                        job.error = "Failed to launch analyze"
-                        analyze_done.add(job.name)
-                        self.run_status.jobs[job.name]["status"] = "failed"
-                        self.run_status.jobs[job.name]["error"] = job.error
-                        self.status_manager.update_job(f"{job.name}_analyze", status="failed")
-                        # Free CPU slot if we took it
-                        if analyze_uses_cpu:
-                            analyze_cpu_slot = False
+                        # Remove from pending
+                        analyze_pending.discard(job.name)
+
+                        # Update status
+                        self.status_manager.update_job(f"{job.name}_analyze", status="analyzing", device=analyze_device)
+
+                        # Launch analyze+figures
+                        env = self._get_launch_env(analyze_gpu_id)
+                        proc = self._launch_process(["analyze", "figures"], job, env, task="analyze")
+
+                        if proc:
+                            analyze_running[proc.pid] = (proc, job)
+                        else:
+                            job.status = "failed"
+                            job.error = "Failed to launch analyze"
+                            analyze_done.add(job.name)
+                            self.run_status.jobs[job.name]["status"] = "failed"
+                            self.run_status.jobs[job.name]["error"] = job.error
+                            self.status_manager.update_job(f"{job.name}_analyze", status="failed")
+                            # Free CPU slot if we took it
+                            if analyze_uses_cpu:
+                                analyze_cpu_slot = False
 
                 # === Check completed analyze ===
                 finished_analyze = [pid for pid, (proc, _) in analyze_running.items() if proc.poll() is not None]

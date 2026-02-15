@@ -1,4 +1,4 @@
-# General TEST config for Slide-seq V2 dataset (quick 10-epoch runs)
+# General TEST config for Slide-seq V2 dataset (100-epoch runs)
 # Use: spatial_factorization run all -c configs/slideseq/general_test.yaml
 
 name: slideseq_test
@@ -40,7 +40,7 @@ model:
   inducing_allocation: derived
 
 training:
-  max_iter: 10
+  max_iter: 200
   learning_rate: 2e-3
   optimizer: Adam
   tol: 1e-4

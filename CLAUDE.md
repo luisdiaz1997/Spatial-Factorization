@@ -332,20 +332,20 @@ During parallel training, a live-updating table shows progress with separate row
 
 ```
                                           Training Progress
-┏━━━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━┓
-┃ Job         ┃ Task      ┃ Device  ┃ Status    ┃ Epoch       ┃ ELBO        ┃ Remaining ┃ Elapsed   ┃
-┡━━━━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━━┩
-│ lcgp        │ train     │ cuda:0  │ completed │ 10/10       │ -335521443… │ 00:00     │ 0:00:15   │
-│ lcgp        │ analyze   │ cuda:0  │ analyzing │ 600/1000    │ -           │ 00:01     │ 0:00:00   │
-│ mggp_lcgp   │ train     │ cuda:1  │ training  │ 0/10        │ -           │ -         │ 0:00:02   │
-│ mggp_lcgp   │ analyze   │ pending │ pending   │ -           │ -           │ -         │ 0:00:00   │
-│ mggp_svgp   │ train     │ cpu     │ completed │ 10/10       │ -49833232.0 │ 00:00     │ 0:01:43   │
-│ mggp_svgp   │ analyze   │ cpu     │ analyzing │ 114/1000    │ -           │ 01:42     │ 0:00:00   │
-│ pnmf        │ train     │ cuda:0  │ completed │ 10/10       │ -45042568.0 │ 00:00     │ 0:00:08   │
-│ pnmf        │ analyze   │ cuda:0  │ completed │ 82/1000     │ -           │ 00:03     │ 0:00:00   │
-│ svgp        │ train     │ cuda:1  │ completed │ 10/10       │ -50454488.0 │ 00:00     │ 0:01:29   │
-│ svgp        │ analyze   │ cuda:1  │ analyzing │ 80/1000     │ -           │ 00:02     │ 0:00:00   │
-└─────────────┴───────────┴─────────┴───────────┴─────────────┴─────────────┴───────────┴───────────┘
+┏━━━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━┓
+┃ Job         ┃ Task      ┃ Device  ┃ Status    ┃ Epoch       ┃ ELBO             ┃ Time             ┃
+┡━━━━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━┩
+│ lcgp        │ train     │ cuda:0  │ completed │ 200/200     │ -335521443.5     │ 0:00:15/-        │
+│ lcgp        │ analyze   │ cuda:0  │ analyzing │ 600/1000    │ -                │ 0:00:00/00:01    │
+│ mggp_lcgp   │ train     │ cuda:1  │ training  │ 50/200      │ -49833232.0      │ 0:00:02/0:01:30  │
+│ mggp_lcgp   │ analyze   │ pending │ pending   │ -           │ -                │ 0:00:00/-        │
+│ mggp_svgp   │ train     │ cpu     │ completed │ 200/200     │ -45042568.0      │ 0:01:43/-        │
+│ mggp_svgp   │ analyze   │ cpu     │ analyzing │ 114/1000    │ -                │ 0:00:00/01:42    │
+│ pnmf        │ train     │ cuda:0  │ completed │ 200/200     │ -50454488.0      │ 0:00:08/-        │
+│ pnmf        │ analyze   │ cuda:0  │ completed │ 82/1000     │ -                │ 0:00:00/00:03    │
+│ svgp        │ train     │ cuda:1  │ completed │ 200/200     │ -47521234.5      │ 0:01:29/-        │
+│ svgp        │ analyze   │ cuda:1  │ analyzing │ 80/1000     │ -                │ 0:00:00/00:02    │
+└─────────────┴───────────┴─────────┴───────────┴─────────────┴──────────────────┴──────────────────┘
 ```
 
 ### Status Module (`status.py`)
@@ -365,6 +365,7 @@ Parses both PNMF output formats:
 - **Training**: Uses available GPUs (1 job per GPU exclusive) + 1 CPU fallback
 - **Analyze**: Same pattern - parallel with GPU + CPU fallback
 - **CPU fallback**: When all GPUs are busy, at least one job runs on CPU
+- **Training priority**: Training jobs get priority over analyze jobs for GPU/CPU resources. Analyze only starts when no pending training jobs are waiting for resources.
 - **Logs**: Each job writes to `outputs/{dataset}/logs/{model}.log`
 
 ## Available Configs
@@ -372,7 +373,7 @@ Parses both PNMF output formats:
 | Config | Model | Groups | Local | Epochs | Use |
 |--------|-------|--------|-------|--------|-----|
 | `general.yaml` | All 5 models | N/A | N/A | 20000 | Multiplex training |
-| `general_test.yaml` | All 5 models | N/A | N/A | 10 | **Quick multiplex test** |
+| `general_test.yaml` | All 5 models | N/A | N/A | 200 | **Quick multiplex test** |
 | `pnmf.yaml` | Non-spatial PNMF | N/A | N/A | 20000 | Baseline |
 | `svgp.yaml` | SVGP | false | false | 20000 | Full training |
 | `mggp_svgp.yaml` | MGGP_SVGP | true | false | 20000 | Full training |
