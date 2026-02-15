@@ -17,13 +17,13 @@ model:
   E: 3
   spatial: true
   prior: SVGP
-  train_lengthscale: false
-  lengthscale: 8.0
-  sigma: 1.0
   kernel: Matern32
-  cholesky_mode: exp
-  num_inducing: 3000
+  sigma: 1.0
+  lengthscale: 8.0
+  train_lengthscale: false
   diagonal_only: false
+  num_inducing: 3000
+  cholesky_mode: exp
   groups: true
   inducing_allocation: derived
   group_diff_param: 1.0

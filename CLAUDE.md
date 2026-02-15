@@ -328,24 +328,31 @@ spatial_factorization run all -c configs/slideseq/general.yaml --dry-run
 
 ### Live Status Display
 
-During parallel training, a live-updating table shows progress:
+During parallel training, a live-updating table shows progress with separate rows for train and analyze tasks:
 
 ```
-        Training Progress
-┏━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━┓
-┃ Model      ┃ Device ┃ Status ┃ Epoch      ┃ ELBO       ┃ Remaining┃ Elapsed  ┃
-┡━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━┩
-│ pnmf       │ cpu    │ running│ 5000/10000 │ -547500.0  │ 02:45    │ 0:02:34  │
-│ SVGP       │ cuda:0 │ running│ 3000/10000 │ -23456.8   │ 05:12    │ 0:01:42  │
-│ MGGP_SVGP  │ cuda:1 │ running│ 2000/10000 │ -34567.9   │ 08:30    │ 0:00:58  │
-└────────────┴────────┴────────┴────────────┴────────────┴──────────┴──────────┘
+                                          Training Progress
+┏━━━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━┓
+┃ Job         ┃ Task      ┃ Device  ┃ Status    ┃ Epoch       ┃ ELBO        ┃ Remaining ┃ Elapsed   ┃
+┡━━━━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━━┩
+│ lcgp        │ train     │ cuda:0  │ completed │ 10/10       │ -335521443… │ 00:00     │ 0:00:15   │
+│ lcgp        │ analyze   │ cuda:0  │ analyzing │ 600/1000    │ -           │ 00:01     │ 0:00:00   │
+│ mggp_lcgp   │ train     │ cuda:1  │ training  │ 0/10        │ -           │ -         │ 0:00:02   │
+│ mggp_lcgp   │ analyze   │ pending │ pending   │ -           │ -           │ -         │ 0:00:00   │
+│ mggp_svgp   │ train     │ cpu     │ completed │ 10/10       │ -49833232.0 │ 00:00     │ 0:01:43   │
+│ mggp_svgp   │ analyze   │ cpu     │ analyzing │ 114/1000    │ -           │ 01:42     │ 0:00:00   │
+│ pnmf        │ train     │ cuda:0  │ completed │ 10/10       │ -45042568.0 │ 00:00     │ 0:00:08   │
+│ pnmf        │ analyze   │ cuda:0  │ completed │ 82/1000     │ -           │ 00:03     │ 0:00:00   │
+│ svgp        │ train     │ cuda:1  │ completed │ 10/10       │ -50454488.0 │ 00:00     │ 0:01:29   │
+│ svgp        │ analyze   │ cuda:1  │ analyzing │ 80/1000     │ -           │ 00:02     │ 0:00:00   │
+└─────────────┴───────────┴─────────┴───────────┴─────────────┴─────────────┴───────────┴───────────┘
 ```
 
 ### Status Module (`status.py`)
 
 | Component | Purpose |
 |-----------|---------|
-| `JobStatus` | Dataclass tracking name, device, status, epoch, elbo, remaining_time, elapsed |
+| `JobStatus` | Dataclass tracking name, model, task, device, status, epoch, elbo, remaining_time, elapsed |
 | `StatusManager` | Context manager with live `rich` table display |
 | `stream_output()` | Non-blocking subprocess stdout capture with tqdm parsing |
 
@@ -355,8 +362,9 @@ Parses both PNMF output formats:
 
 ### Resource Management (`runner.py`)
 
-- **CPU**: 16 cores per process, max 4 concurrent jobs
-- **GPU**: Virtual slot tracking (11GB budget per job), assigns GPU with most available memory
+- **Training**: Uses available GPUs (1 job per GPU exclusive) + 1 CPU fallback
+- **Analyze**: Same pattern - parallel with GPU + CPU fallback
+- **CPU fallback**: When all GPUs are busy, at least one job runs on CPU
 - **Logs**: Each job writes to `outputs/{dataset}/logs/{model}.log`
 
 ## Available Configs
@@ -376,6 +384,18 @@ Parses both PNMF output formats:
 | `mggp_lcgp_test.yaml` | MGGP_LCGP | true | true | 10 | Quick testing |
 
 ### Testing
+
+**IMPORTANT: Always clean up test outputs before running a new test!**
+
+```bash
+# Remove all model outputs (keep preprocessed data)
+rm -rf outputs/slideseq_test/pnmf outputs/slideseq_test/svgp outputs/slideseq_test/mggp_svgp \
+       outputs/slideseq_test/lcgp outputs/slideseq_test/mggp_lcgp \
+       outputs/slideseq_test/logs outputs/slideseq_test/run_status.json
+
+# Or use the helper script
+./scripts/clean_test_outputs.sh
+```
 
 **IMPORTANT: Use `general_test.yaml` for quick tests, NOT `general.yaml`!**
 

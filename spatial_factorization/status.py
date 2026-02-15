@@ -18,7 +18,9 @@ from rich.table import Table
 class JobStatus:
     """Per-job state for status tracking."""
 
-    name: str
+    name: str  # Unique key: "{model}_{task}" e.g., "pnmf_train"
+    model: str  # Model name: "pnmf", "svgp", etc.
+    task: str  # Task type: "train" or "analyze"
     config_path: Path
     device: str
     status: str  # "pending", "running", "completed", "failed"
@@ -69,7 +71,8 @@ class StatusManager:
     def _make_table(self) -> Table:
         """Build the status table."""
         table = Table(title="Training Progress")
-        table.add_column("Model", style="cyan", width=12)
+        table.add_column("Job", style="cyan", width=12)
+        table.add_column("Task", width=10)
         table.add_column("Device", width=8)
         table.add_column("Status", width=10)
         table.add_column("Epoch", width=12)
@@ -80,11 +83,19 @@ class StatusManager:
         status_styles = {
             "pending": "dim",
             "running": "yellow",
+            "training": "yellow",
+            "analyzing": "yellow",
             "completed": "green",
             "failed": "red",
+            "skipped": "dim",
         }
 
-        for job in self.jobs.values():
+        # Sort by model name, then by task (train before analyze)
+        def sort_key(job):
+            task_order = {"train": 0, "analyze": 1}
+            return (job.model, task_order.get(job.task, 99))
+
+        for job in sorted(self.jobs.values(), key=sort_key):
             style = status_styles.get(job.status, "")
 
             epoch_str = f"{job.epoch}/{job.total_epochs}" if job.total_epochs else "-"
@@ -93,7 +104,8 @@ class StatusManager:
             status_str = f"[{style}]{job.status}[/{style}]" if style else job.status
 
             table.add_row(
-                job.name,
+                job.model,
+                job.task,
                 job.device,
                 status_str,
                 epoch_str,
@@ -130,19 +142,35 @@ class StatusManager:
         self.console.print(self._make_table())
 
         self.console.print("\n[bold]Log Files:[/bold]")
+        # Get unique log files per model (not per task)
+        seen_models = set()
         for job in self.jobs.values():
-            if job.log_file:
-                self.console.print(f"  {job.name}: {job.log_file}")
+            if job.log_file and job.model not in seen_models:
+                self.console.print(f"  {job.model}: {job.log_file}")
+                seen_models.add(job.model)
 
-        # Summary stats
-        completed = sum(1 for j in self.jobs.values() if j.status == "completed")
-        failed = sum(1 for j in self.jobs.values() if j.status == "failed")
-        total = len(self.jobs)
+        # Summary stats - count unique models
+        models = set(j.model for j in self.jobs.values())
+        completed_models = sum(
+            1 for m in models
+            if all(
+                self.jobs.get(f"{m}_train", self.jobs.get(f"{m}_analyze")) and
+                self.jobs.get(f"{m}_train", type('obj', (), {'status': 'pending'})()).status == "completed" and
+                self.jobs.get(f"{m}_analyze", type('obj', (), {'status': 'pending'})()).status == "completed"
+                for t in ["train", "analyze"]
+                if f"{m}_{t}" in self.jobs
+            )
+        )
+        total_models = len(models)
 
-        if failed == 0:
-            self.console.print(f"\n[green]All {total} models completed successfully.[/green]")
+        # Simpler count: train tasks completed = models completed
+        train_completed = sum(1 for j in self.jobs.values() if j.task == "train" and j.status == "completed")
+        train_failed = sum(1 for j in self.jobs.values() if j.task == "train" and j.status == "failed")
+
+        if train_failed == 0:
+            self.console.print(f"\n[green]All {train_completed} models completed successfully.[/green]")
         else:
-            self.console.print(f"\n[yellow]{completed}/{total} models completed, {failed} failed.[/yellow]")
+            self.console.print(f"\n[yellow]{train_completed}/{total_models} models completed, {train_failed} failed.[/yellow]")
 
     def __enter__(self) -> "StatusManager":
         self.start_live()

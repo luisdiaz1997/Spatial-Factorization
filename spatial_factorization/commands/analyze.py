@@ -37,15 +37,25 @@ def _load_model(model_dir: Path):
 
     For spatial models, pickle fails due to MGGPWrapper, so we reconstruct
     the model architecture directly from GPzoo and load the state dict.
+
+    When CUDA is not available, we prioritize .pth files which support map_location.
     """
-    # Try pickle first (works for non-spatial models)
+    import torch
+
     pkl_path = model_dir / "model.pkl"
-    if pkl_path.exists():
+    pth_path = model_dir / "model.pth"
+
+    # If CUDA is not available, try .pth first (it uses map_location='cpu')
+    if not torch.cuda.is_available() and pth_path.exists():
+        # Fall through to .pth loading below
+        pass
+    elif pkl_path.exists():
+        # Try pickle first (works for non-spatial models on matching device)
         try:
             with open(pkl_path, "rb") as f:
                 return pickle.load(f)
-        except (AttributeError, TypeError, EOFError, pickle.PicklingError):
-            # Pickle failed (likely spatial model), load from .pth
+        except (AttributeError, TypeError, EOFError, pickle.PicklingError, RuntimeError):
+            # Pickle failed (likely spatial model or CUDA tensor on CPU-only), load from .pth
             pass
 
     # Load from torch state dict and reconstruct
@@ -195,7 +205,7 @@ def _load_model(model_dir: Path):
         # Infer shapes from state dict
         # GaussianPrior.mean is (L, N)
         L, N = prior_sd["mean"].shape
-        D = model_sd["W.param"].shape[0]
+        D = n_features  # Already computed from state["components"] above
 
         dummy_y = torch.empty(D, N)
         prior = GaussianPrior(y=dummy_y, L=L)

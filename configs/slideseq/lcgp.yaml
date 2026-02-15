@@ -17,15 +17,15 @@ model:
   E: 3
   spatial: true
   prior: LCGP
-  train_lengthscale: false
-  lengthscale: 8.0
-  sigma: 1.0
   kernel: Matern32
+  sigma: 1.0
+  lengthscale: 8.0
+  train_lengthscale: false
   local: true
-  low_rank_mode: softplus
   precompute_knn: true
-  rank: null
+  low_rank_mode: softplus
   K: 50
+  rank: null
 
 training:
   max_iter: 10
