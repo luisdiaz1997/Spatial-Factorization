@@ -1,11 +1,10 @@
-# General config for Slide-seq V2 dataset (superset of all model params)
-# This config is used to generate per-model configs (pnmf.yaml, svgp.yaml, mggp_svgp.yaml)
-# Use: spatial_factorization generate -c configs/slideseq/general.yaml
+# General TEST config for Slide-seq V2 dataset (quick 10-epoch runs)
+# Use: spatial_factorization run all -c configs/slideseq/general_test.yaml
 
-name: slideseq
+name: slideseq_test
 seed: 67
 dataset: slideseq
-output_dir: outputs/slideseq
+output_dir: outputs/slideseq_test
 
 preprocessing:
   spatial_scale: 50.0
@@ -41,7 +40,7 @@ model:
   inducing_allocation: derived
 
 training:
-  max_iter: 20000
+  max_iter: 10
   learning_rate: 2e-3
   optimizer: Adam
   tol: 1e-4
@@ -50,4 +49,3 @@ training:
   batch_size: 7000
   y_batch_size: 2000
   shuffle: true
-

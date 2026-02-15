@@ -43,6 +43,7 @@ def _save_model(model, config: Config, model_dir: Path) -> None:
         state["hyperparameters"]["spatial"] = True
         state["hyperparameters"]["prior"] = config.prior
         state["hyperparameters"]["multigroup"] = config.groups
+        state["hyperparameters"]["local"] = config.local
 
     torch.save(state, model_dir / "model.pth")
 
@@ -107,8 +108,15 @@ def run(config_path: str):
     # Train (spatial models require coordinates; groups are optional)
     t0 = time.perf_counter()
     if config.spatial:
-        print(f"  spatial=True, prior={config.prior}, groups={config.groups}")
-        print(f"  Inducing points (M): {config.model.get('num_inducing', 3000)}")
+        print(f"  spatial=True, prior={config.prior}, groups={config.groups}, local={config.local}")
+        if config.local:
+            # LCGP-specific info
+            K = config.model.get('K', 50)
+            rank = config.model.get('rank', None)
+            print(f"  LCGP: K={K}, rank={rank}")
+        else:
+            # SVGP-specific info
+            print(f"  Inducing points (M): {config.model.get('num_inducing', 3000)}")
         print(f"  Kernel: {config.model.get('kernel', 'Matern32')} (lengthscale={config.model.get('lengthscale', 1.0)})")
 
         fit_kwargs = dict(

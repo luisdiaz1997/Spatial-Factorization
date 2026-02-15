@@ -80,6 +80,30 @@ def _load_analysis_results(model_dir: Path) -> dict:
         with open(enrichment_path) as f:
             results["gene_enrichment"] = json.load(f)
 
+    # Load Lu data (SVGP: Lu.pt, LCGP: Lu_diag.npy + Lu_V.npy)
+    lu_path = model_dir / "Lu.pt"
+    lu_diag_path = model_dir / "Lu_diag.npy"
+    lu_v_path = model_dir / "Lu_V.npy"
+
+    if lu_path.exists():
+        import torch
+        results["Lu"] = torch.load(lu_path, map_location="cpu", weights_only=False)
+        results["is_lcgp"] = False
+    elif lu_diag_path.exists() and lu_v_path.exists():
+        results["Lu_diag"] = np.load(lu_diag_path)  # (L, M)
+        results["Lu_V"] = np.load(lu_v_path)        # (L, M, R)
+        results["is_lcgp"] = True
+
+    # Load Z (inducing point locations)
+    z_path = model_dir / "Z.npy"
+    if z_path.exists():
+        results["Z"] = np.load(z_path)  # (M, 2)
+
+    # Load groupsZ (inducing point group assignments)
+    groupsz_path = model_dir / "groupsZ.npy"
+    if groupsz_path.exists():
+        results["groupsZ"] = np.load(groupsz_path)  # (M,)
+
     return results
 
 
@@ -970,33 +994,38 @@ def run(config_path: str):
         print(f"  Saved: {figures_dir}/scales_spatial.png")
 
     # 1c. Lu inducing-point uncertainty (spatial models only)
-    lu_path = model_dir / "Lu.pt"
-    z_path = model_dir / "Z.npy"
-    if spatial and lu_path.exists() and z_path.exists():
-        import torch
-        print("Generating Lu inducing-point uncertainty plot...")
-        Lu_constrained = torch.load(lu_path, map_location="cpu", weights_only=False)
-        Z = np.load(z_path)
-        fig = plot_lu_scales_at_inducing(
-            Lu_constrained, Z,
-            moran_idx=moran_idx,
-            moran_values=moran_values,
-        )
-        fig.savefig(figures_dir / "lu_scales_inducing.png", dpi=150, bbox_inches="tight")
-        plt.close(fig)
-        print(f"  Saved: {figures_dir}/lu_scales_inducing.png")
+    is_lcgp = results.get("is_lcgp", False)
+    Lu_data = results.get("Lu")
+    Z_data = results.get("Z")
+    if spatial and Z_data is not None:
+        if Lu_data is not None:
+            # SVGP: Full Cholesky factor
+            print("Generating Lu inducing-point uncertainty plot...")
+            fig = plot_lu_scales_at_inducing(
+                Lu_data, Z_data,
+                moran_idx=moran_idx,
+                moran_values=moran_values,
+            )
+            fig.savefig(figures_dir / "lu_scales_inducing.png", dpi=150, bbox_inches="tight")
+            plt.close(fig)
+            print(f"  Saved: {figures_dir}/lu_scales_inducing.png")
+        elif is_lcgp:
+            # LCGP: Skip since M=N (all data points are inducing)
+            # The scales_spatial.png already shows uncertainty at all data points
+            print("  Skipping Lu inducing plot for LCGP (M=N, see scales_spatial.png instead)")
+            pass
 
     # 1d. Cell-type spatial plot (data groups + inducing points side-by-side)
     if data.groups is not None:
         groups_np = data.groups.numpy()
-        # Load inducing-point data if available
-        groupsz_path = model_dir / "groupsZ.npy"
+        # Load inducing-point data if available (skip for LCGP since M=N)
+        groupsZ_data = results.get("groupsZ")
         Z_celltype = None
         groupsZ_celltype = None
-        if spatial and z_path.exists():
-            Z_celltype = np.load(z_path)
-            if groupsz_path.exists():
-                groupsZ_celltype = np.load(groupsz_path)
+        if spatial and Z_data is not None and not is_lcgp:
+            # Only show inducing points for SVGP (LCGP uses all data points)
+            Z_celltype = Z_data
+            groupsZ_celltype = groupsZ_data
         fig = plot_groups(
             coords, groups_np, group_names,
             Z=Z_celltype, groupsZ=groupsZ_celltype,

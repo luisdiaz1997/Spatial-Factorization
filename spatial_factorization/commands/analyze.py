@@ -90,41 +90,91 @@ def _load_model(model_dir: Path):
             # Fallback: check hyperparameters
             is_multigroup = hyperparams.get("multigroup", False)
 
-        if is_multigroup:
-            from gpzoo.gp import MGGP_SVGP
-            from gpzoo.kernels import batched_MGGP_Matern32
+        # Detect LCGP vs SVGP from state dict (LCGP has Lu.diag._raw, SVGP has Lu._raw)
+        is_lcgp = "Lu.diag._raw" in prior_sd
 
-            groupsZ = prior_sd["groupsZ"]      # (M,)
-            n_groups = int(groupsZ.max().item()) + 1
+        if is_lcgp:
+            # LCGP reconstruction path
+            from gpzoo.gp import LCGP, MGGP_LCGP
+            from gpzoo.kernels import batched_Matern32, batched_MGGP_Matern32
+            from gpzoo.modules import LowRankPlusDiagonal
 
-            kernel = batched_MGGP_Matern32(
-                sigma=1.0, lengthscale=1.0,
-                group_diff_param=10.0, n_groups=n_groups,
-            )
-            gp = MGGP_SVGP(
-                kernel, dim=dim, M=M, n_groups=n_groups,
-                jitter=1e-5, cholesky_mode="exp", diagonal_only=False,
-            )
+            # Extract rank from Lu.V._raw shape: (L, M, R)
+            rank = prior_sd["Lu.V._raw"].shape[2] if "Lu.V._raw" in prior_sd else 10
+            K = hyperparams.get("K", 50)
+
+            if is_multigroup:
+                groupsZ = prior_sd["groupsZ"]      # (M,)
+                n_groups = int(groupsZ.max().item()) + 1
+
+                kernel = batched_MGGP_Matern32(
+                    sigma=1.0, lengthscale=1.0,
+                    group_diff_param=10.0, n_groups=n_groups,
+                )
+                gp = MGGP_LCGP(
+                    kernel, dim=dim, M=M, n_groups=n_groups,
+                    jitter=1e-5, K=K, rank=rank,
+                )
+            else:
+                kernel = batched_Matern32(sigma=1.0, lengthscale=1.0)
+                gp = LCGP(
+                    kernel, dim=dim, M=M,
+                    jitter=1e-5, K=K, rank=rank,
+                )
+
+            # Replace Lu with LowRankPlusDiagonal
+            del gp.Lu
+            gp.Lu = LowRankPlusDiagonal(m=M, rank=rank, batch_size=L)
+            gp.mu = nn.Parameter(torch.randn(L, M) * 0.01)
+
+            # Load the trained prior state
+            gp.load_state_dict(prior_sd)
+            model._prior = gp
+
+            # Set KNN indices (needed for LCGP forward pass)
+            gp.knn_idx = gp.calculate_knn(Z)[:, :-1]  # exclude self
+            gp.knn_idz = gp.knn_idx
+
+            # Mark model as local (for transform functions)
+            model.local = True
+
         else:
-            from gpzoo.gp import SVGP
-            from gpzoo.kernels import batched_Matern32
+            # SVGP/MGGP_SVGP reconstruction path
+            if is_multigroup:
+                from gpzoo.gp import MGGP_SVGP
+                from gpzoo.kernels import batched_MGGP_Matern32
 
-            kernel = batched_Matern32(
-                sigma=1.0, lengthscale=1.0,
-            )
-            gp = SVGP(
-                kernel, dim=dim, M=M,
-                jitter=1e-5, cholesky_mode="exp", diagonal_only=False,
-            )
+                groupsZ = prior_sd["groupsZ"]      # (M,)
+                n_groups = int(groupsZ.max().item()) + 1
 
-        # Replace mu and Lu with correct batched shapes (L, M) and (L, M, M)
-        del gp.Lu
-        gp.Lu = CholeskyParameter((L, M), mode="exp", diagonal_only=False)
-        gp.mu = nn.Parameter(torch.randn(L, M) * 0.01)
+                kernel = batched_MGGP_Matern32(
+                    sigma=1.0, lengthscale=1.0,
+                    group_diff_param=10.0, n_groups=n_groups,
+                )
+                gp = MGGP_SVGP(
+                    kernel, dim=dim, M=M, n_groups=n_groups,
+                    jitter=1e-5, cholesky_mode="exp", diagonal_only=False,
+                )
+            else:
+                from gpzoo.gp import SVGP
+                from gpzoo.kernels import batched_Matern32
 
-        # Load the trained prior state
-        gp.load_state_dict(prior_sd)
-        model._prior = gp
+                kernel = batched_Matern32(
+                    sigma=1.0, lengthscale=1.0,
+                )
+                gp = SVGP(
+                    kernel, dim=dim, M=M,
+                    jitter=1e-5, cholesky_mode="exp", diagonal_only=False,
+                )
+
+            # Replace mu and Lu with correct batched shapes (L, M) and (L, M, M)
+            del gp.Lu
+            gp.Lu = CholeskyParameter((L, M), mode="exp", diagonal_only=False)
+            gp.mu = nn.Parameter(torch.randn(L, M) * 0.01)
+
+            # Load the trained prior state
+            gp.load_state_dict(prior_sd)
+            model._prior = gp
 
         # Reconstruct PoissonFactorization with a dummy y (only shape matters)
         model_sd = state["model_state_dict"]
@@ -594,12 +644,27 @@ def run(config_path: str):
     if spatial:
         import torch as _torch
         gp = model._prior
-        Lu_constrained = gp.Lu.data[sort_order, :, :]  # (L, M, M) reordered by Moran's I
         sd = gp.state_dict()
         Z = sd["Z"]                  # (M, 2) inducing locations
-        _torch.save(Lu_constrained, model_dir / "Lu.pt")
+
+        # Check if LCGP (has LowRankPlusDiagonal Lu) vs SVGP (has CholeskyParameter Lu)
+        is_lcgp = hasattr(gp.Lu, 'V')
+
+        if is_lcgp:
+            # LCGP: Save Lu components separately (diagonal + low-rank V)
+            # Lu.diag is (L, M), Lu.V is (L, M, R)
+            Lu_diag = gp.Lu.diag.data[sort_order, :]  # (L, M) reordered by Moran's I
+            Lu_V = gp.Lu.V.data[sort_order, :, :]     # (L, M, R) reordered by Moran's I
+            np.save(model_dir / "Lu_diag.npy", Lu_diag.detach().cpu().numpy())
+            np.save(model_dir / "Lu_V.npy", Lu_V.detach().cpu().numpy())
+            msg = f"  Saved LCGP Lu data: Lu_diag {tuple(Lu_diag.shape)}, Lu_V {tuple(Lu_V.shape)}, Z {tuple(Z.shape)}"
+        else:
+            # SVGP: Save full Cholesky factor
+            Lu_constrained = gp.Lu.data[sort_order, :, :]  # (L, M, M) reordered by Moran's I
+            _torch.save(Lu_constrained, model_dir / "Lu.pt")
+            msg = f"  Saved inducing-point data: Lu {tuple(Lu_constrained.shape)}, Z {tuple(Z.shape)}"
+
         np.save(model_dir / "Z.npy", Z.detach().cpu().numpy())
-        msg = f"  Saved inducing-point data: Lu {tuple(Lu_constrained.shape)}, Z {tuple(Z.shape)}"
         if "groupsZ" in sd:
             groupsZ = sd["groupsZ"]  # (M,) inducing point group assignments
             np.save(model_dir / "groupsZ.npy", groupsZ.detach().cpu().numpy())

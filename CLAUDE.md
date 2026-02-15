@@ -42,8 +42,10 @@ All stages are **implemented and working**.
 ┌─────────────────────┐         ┌─────────────────────┐
 │        PNMF         │         │       GPzoo         │
 │  - sklearn API      │         │  - SVGP, MGGP_SVGP  │
-│  - spatial=True     │◄────────│  - batched kernels   │
-│  - multigroup       │         │  - CholeskyParameter  │
+│  - spatial=True     │◄────────│  - LCGP, MGGP_LCGP  │
+│  - multigroup       │         │  - batched kernels   │
+│  - local (LCGP)     │         │  - CholeskyParameter │
+│                     │         │  - LowRankPlusDiagonal │
 └─────────────────────┘         └─────────────────────┘
 ```
 
@@ -69,11 +71,16 @@ Spatial-Factorization/
 │       ├── slideseq.py        # SlideseqV2 loader
 │       └── tenxvisium.py      # 10x Visium loader
 ├── configs/slideseq/
-│   ├── general.yaml           # Superset config for multiplex training
+│   ├── general.yaml           # Superset config for multiplex training (generates 5 models)
 │   ├── pnmf.yaml              # Non-spatial baseline
-│   ├── svgp.yaml              # MGGP_SVGP (full training)
+│   ├── svgp.yaml              # SVGP (no groups, full training)
+│   ├── mggp_svgp.yaml         # MGGP_SVGP (groups, full training)
+│   ├── lcgp.yaml              # LCGP (no groups, generated from general.yaml)
+│   ├── mggp_lcgp.yaml         # MGGP_LCGP (groups, generated from general.yaml)
 │   ├── svgp_test.yaml         # MGGP_SVGP (10 epochs, testing)
-│   └── svgp_no_groups_test.yaml # SVGP no groups (10 epochs, testing)
+│   ├── svgp_no_groups_test.yaml # SVGP no groups (10 epochs, testing)
+│   ├── lcgp_test.yaml         # LCGP (10 epochs, testing)
+│   └── mggp_lcgp_test.yaml    # MGGP_LCGP (10 epochs, testing)
 ├── tests/
 │   └── test_svgp_model.py     # SVGP model inspection tests
 ├── outputs/                   # Generated (git-ignored)
@@ -91,8 +98,10 @@ Model output directories are determined by `config.model_name`:
 | Config | `model_name` | Directory |
 |--------|-------------|-----------|
 | `spatial: false` | `pnmf` | `outputs/slideseq/pnmf/` |
-| `spatial: true, groups: false` | `svgp` | `outputs/slideseq/svgp/` |
-| `spatial: true, groups: true` | `mggp_svgp` | `outputs/slideseq/mggp_svgp/` |
+| `spatial: true, groups: false, local: false` | `svgp` | `outputs/slideseq/svgp/` |
+| `spatial: true, groups: true, local: false` | `mggp_svgp` | `outputs/slideseq/mggp_svgp/` |
+| `spatial: true, groups: false, local: true` | `lcgp` | `outputs/slideseq/lcgp/` |
+| `spatial: true, groups: true, local: true` | `mggp_lcgp` | `outputs/slideseq/mggp_lcgp/` |
 
 All names are lowercase. The prior name is lowercased, and when `groups: true`, the `mggp_` prefix is added.
 
@@ -109,7 +118,9 @@ outputs/slideseq/
 ├── logs/                   # Multiplex training logs
 │   ├── pnmf.log            # stdout/stderr from pnmf training
 │   ├── svgp.log            # stdout/stderr from SVGP training
-│   └── mggp_svgp.log       # stdout/stderr from MGGP_SVGP training
+│   ├── mggp_svgp.log       # stdout/stderr from MGGP_SVGP training
+│   ├── lcgp.log            # stdout/stderr from LCGP training
+│   └── mggp_lcgp.log       # stdout/stderr from MGGP_LCGP training
 │
 ├── run_status.json         # Multiplex run summary (JSON)
 │
@@ -154,6 +165,29 @@ outputs/slideseq/
         ├── gene_enrichment.png
         ├── enrichment_factor_*.png
         └── enrichment_by_group/
+
+├── lcgp/                    # LCGP (local=True, groups=false)
+│   ├── model.pth            # PyTorch state dict
+│   ├── factors.npy, scales.npy, loadings.npy
+│   ├── loadings_group_*.npy # Per-group loadings (computed post-hoc)
+│   ├── Z.npy                # (N, 2) ALL data points as inducing (M=N)
+│   ├── Lu_diag.npy          # (L, N) diagonal of low-rank+diagonal covariance
+│   ├── Lu_V.npy             # (L, N, R) low-rank component
+│   ├── moran_i.csv, gene_enrichment.json, metrics.json
+│   └── figures/
+│       ├── (same as svgp, but NO lu_scales_inducing.png since M=N)
+│       └── points.png       # Data groups only (no inducing overlay)
+
+└── mggp_lcgp/               # MGGP_LCGP (local=True, groups=true)
+    ├── model.pth
+    ├── factors.npy, scales.npy, loadings.npy
+    ├── loadings_group_*.npy
+    ├── Z.npy, groupsZ.npy   # All data points + group assignments
+    ├── Lu_diag.npy, Lu_V.npy  # Low-rank+diagonal covariance components
+    ├── moran_i.csv, gene_enrichment.json, metrics.json
+    └── figures/
+        ├── (same as mggp_svgp, but NO lu_scales_inducing.png)
+        └── points.png       # Data groups (no separate inducing overlay)
 ```
 
 ---
@@ -165,14 +199,19 @@ config = Config.from_yaml("configs/slideseq/svgp_test.yaml")
 
 config.spatial      # bool: model.spatial (default False)
 config.groups       # bool: model.groups (default False)
+config.local        # bool: model.local (default False) - LCGP mode
 config.prior        # str: model.prior (used for output dir naming, not passed to PNMF)
-config.model_name   # str: "pnmf" | "svgp" | "mggp_svgp" (used for output dir)
+config.model_name   # str: "pnmf" | "svgp" | "mggp_svgp" | "lcgp" | "mggp_lcgp"
 config.to_pnmf_kwargs()  # dict: merged model+training kwargs for PNMF constructor (no prior)
 ```
 
 The `groups` config field maps to PNMF's `multigroup` parameter:
-- `groups: true` → `multigroup=True` → PNMF uses `MGGP_SVGP` + `batched_MGGP_Matern32`
-- `groups: false` → `multigroup=False` → PNMF uses `SVGP` + `batched_Matern32` + K-means inducing points
+- `groups: true` → `multigroup=True` → PNMF uses MGGP variants
+- `groups: false` → `multigroup=False` → PNMF uses non-group variants
+
+The `local` config field selects LCGP vs SVGP:
+- `local: false` → SVGP variants (sparse variational GP with M inducing points)
+- `local: true` → LCGP variants (locally conditioned GP, M=N inducing points)
 
 ---
 
@@ -188,33 +227,51 @@ This package does NOT implement models or training loops. It provides:
 
 ### 2. Spatial Model Variants
 
-| Variant | PNMF params | GPzoo classes | Groups required |
-|---------|-------------|---------------|-----------------|
-| **MGGP_SVGP** | `spatial=True, multigroup=True` | `MGGP_SVGP`, `batched_MGGP_Matern32` | Yes |
-| **SVGP** | `spatial=True, multigroup=False` | `SVGP`, `batched_Matern32` | No |
-| **pnmf** | `spatial=False` | None (GaussianPrior) | No |
+| Variant | PNMF params | GPzoo classes | Groups | Complexity |
+|---------|-------------|---------------|--------|------------|
+| **MGGP_SVGP** | `spatial=True, multigroup=True, local=False` | `MGGP_SVGP`, `batched_MGGP_Matern32` | Yes | O(M²) |
+| **SVGP** | `spatial=True, multigroup=False, local=False` | `SVGP`, `batched_Matern32` | No | O(M²) |
+| **MGGP_LCGP** | `spatial=True, multigroup=True, local=True` | `MGGP_LCGP`, `batched_MGGP_Matern32` | Yes | O(NR) |
+| **LCGP** | `spatial=True, multigroup=False, local=True` | `LCGP`, `batched_Matern32` | No | O(NR) |
+| **pnmf** | `spatial=False` | None (GaussianPrior) | No | O(NL) |
 
-### 3. Prior Selection and Model Loading
+- **SVGP**: Sparse variational GP with M<<N inducing points, O(M²) covariance
+- **LCGP**: Locally conditioned GP with ALL N points as inducing, O(NR) low-rank+diagonal covariance (R≈50-100)
+
+### 3. LCGP vs SVGP Trade-offs
+
+| Aspect | SVGP | LCGP |
+|--------|------|------|
+| Inducing points | M<<N (e.g., 3000) | M=N (all data) |
+| Covariance complexity | O(M²) full Cholesky | O(NR) low-rank+diagonal |
+| GPU memory | ~7.6 GB peak | ~7.6 GB peak |
+| Saved Lu | `Lu.pt` (L,M,M) ~344MB | `Lu_diag.npy` + `Lu_V.npy` ~90MB |
+| Best for | Large datasets | When full spatial coverage needed |
+
+### 4. Prior Selection and Model Loading
 
 **Training:** The `prior` field in YAML is NOT passed to PNMF. PNMF auto-selects the prior based on `spatial`, `multigroup`, and `local` flags:
 - `spatial=False` → `GaussianPrior`
-- `spatial=True, multigroup=False` → `SVGP`
-- `spatial=True, multigroup=True` → `MGGP_SVGP`
+- `spatial=True, local=False, multigroup=False` → `SVGP`
+- `spatial=True, local=False, multigroup=True` → `MGGP_SVGP`
+- `spatial=True, local=True, multigroup=False` → `LCGP`
+- `spatial=True, local=True, multigroup=True` → `MGGP_LCGP`
 
-**Loading:** `_load_model()` detects MGGP vs SVGP by checking if `groupsZ` exists in the saved state dict:
-- `groupsZ` present → reconstruct `MGGP_SVGP` + `batched_MGGP_Matern32`
-- `groupsZ` absent → reconstruct `SVGP` + `batched_Matern32`
+**Loading:** `_load_model()` detects model type from saved state dict:
+1. **LCGP vs SVGP**: Check for `Lu.diag._raw` key (LCGP has it, SVGP has `Lu._raw`)
+2. **Multigroup vs not**: Check for `groupsZ` key in state dict
+3. Reconstruct appropriate GP class with correct kernel and covariance parameter type
 
 The `prior` field in YAML/config is only used for:
 - Naming output directories (`model_name` property)
 - Print statements during training
 - Saved to `model.pth` hyperparameters for documentation
 
-### 4. Factor Ordering by Moran's I
+### 5. Factor Ordering by Moran's I
 
 The analyze stage reorders all factor-related outputs by descending Moran's I before saving. Factor 0 always has the highest spatial autocorrelation. This applies to: `factors.npy`, `scales.npy`, `loadings.npy`, `Lu.pt`, group loadings, and gene enrichment. The `moran_i.csv` reflects the new order (already sorted descending).
 
-### 5. Groups vs No-Groups Pipeline Behavior
+### 6. Groups vs No-Groups Pipeline Behavior
 
 When `groups: false`:
 - **train**: Only passes `coordinates` to `model.fit()` (no `groups` arg)
@@ -259,7 +316,7 @@ Run multiple models in parallel with resource-aware GPU/CPU scheduling.
 # Generate per-model configs from general.yaml
 spatial_factorization generate -c configs/slideseq/general.yaml
 
-# Run all models in parallel (pnmf, SVGP, MGGP_SVGP)
+# Run all models in parallel (pnmf, SVGP, MGGP_SVGP, LCGP, MGGP_LCGP)
 spatial_factorization run all -c configs/slideseq/general.yaml
 
 # Force re-preprocessing
@@ -304,13 +361,48 @@ Parses both PNMF output formats:
 
 ## Available Configs
 
-| Config | Model | Groups | Epochs | Use |
-|--------|-------|--------|--------|-----|
-| `general.yaml` | All (generates pnmf, SVGP, MGGP_SVGP) | N/A | 20000 | Multiplex training |
-| `pnmf.yaml` | Non-spatial PNMF | N/A | 10000 | Baseline |
-| `svgp.yaml` | MGGP_SVGP | true | 10000 | Full training |
-| `svgp_test.yaml` | MGGP_SVGP | true | 10 | Quick testing |
-| `svgp_no_groups_test.yaml` | SVGP | false | 10 | Quick testing |
+| Config | Model | Groups | Local | Epochs | Use |
+|--------|-------|--------|-------|--------|-----|
+| `general.yaml` | All 5 models | N/A | N/A | 20000 | Multiplex training |
+| `general_test.yaml` | All 5 models | N/A | N/A | 10 | **Quick multiplex test** |
+| `pnmf.yaml` | Non-spatial PNMF | N/A | N/A | 20000 | Baseline |
+| `svgp.yaml` | SVGP | false | false | 20000 | Full training |
+| `mggp_svgp.yaml` | MGGP_SVGP | true | false | 20000 | Full training |
+| `lcgp.yaml` | LCGP | false | true | 20000 | Full training (generated) |
+| `mggp_lcgp.yaml` | MGGP_LCGP | true | true | 20000 | Full training (generated) |
+| `svgp_no_groups_test.yaml` | SVGP | false | false | 10 | Quick testing |
+| `svgp_test.yaml` | MGGP_SVGP | true | false | 10 | Quick testing |
+| `lcgp_test.yaml` | LCGP | false | true | 10 | Quick testing |
+| `mggp_lcgp_test.yaml` | MGGP_LCGP | true | true | 10 | Quick testing |
+
+### Testing
+
+**IMPORTANT: Use `general_test.yaml` for quick tests, NOT `general.yaml`!**
+
+```bash
+# Quick test of full multiplex pipeline (10 epochs, outputs to slideseq_test/)
+spatial_factorization run all -c configs/slideseq/general_test.yaml
+
+# Single model quick test
+spatial_factorization run train analyze figures -c configs/slideseq/svgp_test.yaml
+```
+
+**DO NOT run `general.yaml` for testing** - it trains 20000 epochs and takes hours.
+
+#### Running Tests in Tmux (for live output visibility)
+
+To run tests with visible live output in a split tmux pane:
+
+```bash
+# Split current window horizontally and run test on right pane
+tmux split-window -t 15:0 -h
+tmux send-keys -t 15:0.1 'source ~/miniconda3/etc/profile.d/conda.sh && conda activate factorization && python -m spatial_factorization run all -c configs/slideseq/general_test.yaml' Enter
+```
+
+This allows:
+- Viewing the live ELBO training progress table
+- Monitoring analyze/figures stages in real-time
+- Both Claude and user can see output simultaneously
 
 ---
 
@@ -320,24 +412,27 @@ Parses both PNMF output formats:
 |-------|--------|-------------|
 | 0 | **DONE** | Setup & Installation |
 | 1 | **DONE** | Preprocess command |
-| 2 | **DONE** | Train command (PNMF, SVGP, MGGP_SVGP) |
+| 2 | **DONE** | Train command (PNMF, SVGP, MGGP_SVGP, LCGP, MGGP_LCGP) |
 | 3 | **DONE** | Analyze command (Moran's I, reconstruction, group loadings, enrichment) |
 | 4 | **DONE** | Figures command (spatial plots, enrichment, gene plots) |
 | 5 | **DONE** | Multiplex pipeline (parallel training, live status, GPU/CPU scheduling) |
+| 6 | **DONE** | LCGP integration (local=True support, LowRankPlusDiagonal covariance) |
 
 ## Relationship to Other Repos
 
 | Repo | Purpose | Key Classes |
 |------|---------|-------------|
-| **GPzoo** | GP backends | `SVGP`, `MGGP_SVGP`, `batched_Matern32`, `batched_MGGP_Matern32`, `CholeskyParameter` |
-| **PNMF** | sklearn API | `PNMF` class, `multigroup` param, `spatial=True`, transforms (`get_factors`, `_get_spatial_qF`, `transform_W`) |
+| **GPzoo** | GP backends | `SVGP`, `MGGP_SVGP`, `LCGP`, `MGGP_LCGP`, `batched_Matern32`, `batched_MGGP_Matern32`, `CholeskyParameter`, `LowRankPlusDiagonal` |
+| **PNMF** | sklearn API | `PNMF` class, `multigroup` param, `local` param, `spatial=True`, transforms (`get_factors`, `_get_spatial_qF`, `transform_W`) |
 | **Spatial-Factorization** | Pipeline | Dataset loaders, configs, CLI commands, analysis, figures |
 
-### PNMF Recent Changes (no-groups branch)
+### PNMF API (LCGP branch)
 
-- `multigroup` default changed from `True` to `False`
-- Non-multigroup path uses K-means inducing points (not random)
-- Non-multigroup uses `batched_Matern32` kernel + `SVGP` class
+- `multigroup` default: `False`
+- `local` default: `False` (set `True` for LCGP)
+- `local=True` params: `K=50`, `rank=None`, `low_rank_mode='softplus'`, `precompute_knn=True`
+- Non-multigroup SVGP uses K-means inducing points + `batched_Matern32` kernel
+- LCGP uses all data points as inducing (M=N) with `LowRankPlusDiagonal` covariance
 
 ---
 

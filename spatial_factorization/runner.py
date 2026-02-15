@@ -430,19 +430,36 @@ class JobRunner:
                     job.elapsed = elapsed
 
                     if proc.returncode == 0:
-                        job.status = "completed"
-                        completed += 1
-                        self.run_status.jobs[job.name]["status"] = "completed"
-                        self.run_status.jobs[job.name]["elapsed"] = elapsed
+                        # Training completed, now run post-train stages
+                        # Don't mark as completed until post-train succeeds
                         self.status_manager.update_job(
                             job.name,
-                            status="completed",
-                            end_time=time.time(),
+                            status="analyzing",  # Show progress
                         )
 
-                        # Run post-train stages (outside live display context would be cleaner,
-                        # but we do it here to show progress)
-                        self._run_post_train(job)
+                        post_train_error = self._run_post_train(job)
+
+                        if post_train_error:
+                            job.status = "failed"
+                            job.error = post_train_error
+                            self.run_status.jobs[job.name]["status"] = "failed"
+                            self.run_status.jobs[job.name]["error"] = post_train_error
+                            self.status_manager.update_job(
+                                job.name,
+                                status="failed",
+                                end_time=time.time(),
+                            )
+                        else:
+                            job.status = "completed"
+                            self.run_status.jobs[job.name]["status"] = "completed"
+                            self.run_status.jobs[job.name]["elapsed"] = elapsed
+                            self.status_manager.update_job(
+                                job.name,
+                                status="completed",
+                                end_time=time.time(),
+                            )
+
+                        completed += 1
                     else:
                         job.status = "failed"
                         job.error = f"Exit code: {proc.returncode}"
@@ -461,14 +478,18 @@ class JobRunner:
                 # Sleep before next poll
                 time.sleep(0.5)
 
-    def _run_post_train(self, job: Job) -> None:
-        """Run post-training stages (analyze, figures) for a job."""
+    def _run_post_train(self, job: Job) -> Optional[str]:
+        """Run post-training stages (analyze, figures) for a job.
+
+        Returns:
+            Error message if any stage failed, None if all succeeded.
+        """
         for stage in ["analyze", "figures"]:
             try:
-                self._run_stage(stage, job.config_path)
+                self._run_stage(stage, job.config_path, job.log_file)
             except Exception as e:
-                job.error = f"{stage}: {e}"
-                break
+                return f"{stage}: {e}"
+        return None
 
     def _launch_training(self, job: Job, env: Dict[str, str]) -> Optional[Tuple[subprocess.Popen, threading.Thread]]:
         """Launch a training job as a subprocess with output streaming.
@@ -525,12 +546,16 @@ class JobRunner:
             env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
         return env
 
-    def _run_stage(self, stage: str, config_path: Path) -> None:
+    def _run_stage(self, stage: str, config_path: Path, log_file: Optional[Path] = None) -> subprocess.CompletedProcess:
         """Run a single pipeline stage as a subprocess.
 
         Args:
             stage: Stage name (preprocess, train, analyze, figures).
             config_path: Path to config file.
+            log_file: Optional path to log file for output.
+
+        Returns:
+            CompletedProcess result.
         """
         cmd = [
             sys.executable,
@@ -541,7 +566,27 @@ class JobRunner:
             str(config_path),
         ]
 
-        result = subprocess.run(cmd, check=True)
+        # Run with output capture
+        result = subprocess.run(cmd, capture_output=True, text=True)
+
+        # Log output if log_file provided
+        if log_file:
+            with open(log_file, "a") as f:
+                f.write(f"\n{'='*60}\n")
+                f.write(f"  Stage: {stage}\n")
+                f.write(f"{'='*60}\n\n")
+                if result.stdout:
+                    f.write(result.stdout)
+                if result.stderr:
+                    f.write(f"\n[stderr]:\n{result.stderr}")
+                f.write(f"\n{'='*60}\n\n")
+                if result.returncode != 0:
+                    f.write(f"[FAILED] Exit code: {result.returncode}\n")
+
+        # Raise on failure
+        if result.returncode != 0:
+            raise subprocess.CalledProcessError(result.returncode, cmd, result.stdout, result.stderr)
+
         return result
 
     def _print_final_report(self) -> None:

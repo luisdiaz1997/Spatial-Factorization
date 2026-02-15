@@ -1,4 +1,4 @@
-name: slideseq_pnmf
+name: slideseq_mggp_lcgp
 seed: 67
 dataset: slideseq
 output_dir: outputs/slideseq_test
@@ -15,8 +15,20 @@ model:
   training_mode: standard
   loadings_mode: multiplicative
   E: 3
-  spatial: false
-  prior: GaussianPrior
+  spatial: true
+  prior: LCGP
+  train_lengthscale: false
+  lengthscale: 8.0
+  sigma: 1.0
+  kernel: Matern32
+  local: true
+  low_rank_mode: softplus
+  precompute_knn: true
+  rank: null
+  K: 50
+  groups: true
+  inducing_allocation: derived
+  group_diff_param: 1.0
 
 training:
   max_iter: 10
