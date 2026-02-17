@@ -112,8 +112,7 @@ def run(config_path: str):
         if config.local:
             # LCGP-specific info
             K = config.model.get('K', 50)
-            rank = config.model.get('rank', None)
-            print(f"  LCGP: K={K}, rank={rank}")
+            print(f"  LCGP: K={K}")
         else:
             # SVGP-specific info
             print(f"  Inducing points (M): {config.model.get('num_inducing', 3000)}")

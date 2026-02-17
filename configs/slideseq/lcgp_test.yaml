@@ -24,8 +24,6 @@ model:
   kernel: Matern32
   sigma: 1.0
   K: 50
-  rank: null
-  low_rank_mode: softplus
   precompute_knn: true
 
 training:

@@ -1,7 +1,7 @@
 name: slideseq_lcgp
 seed: 67
 dataset: slideseq
-output_dir: outputs/slideseq_test
+output_dir: outputs/slideseq
 
 preprocessing:
   spatial_scale: 50.0
@@ -10,25 +10,23 @@ preprocessing:
   min_cells: 10
 
 model:
-  loadings_mode: multiplicative
-  mode: expanded
-  E: 3
   n_components: 10
+  mode: expanded
+  loadings_mode: multiplicative
   training_mode: standard
+  E: 3
   spatial: true
   prior: LCGP
+  train_lengthscale: false
   lengthscale: 8.0
   kernel: Matern32
   sigma: 1.0
-  train_lengthscale: false
   local: true
-  precompute_knn: true
-  rank: null
-  low_rank_mode: softplus
   K: 50
+  precompute_knn: true
 
 training:
-  max_iter: 200
+  max_iter: 20000
   learning_rate: 2e-3
   optimizer: Adam
   tol: 1e-4

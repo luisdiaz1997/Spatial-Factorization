@@ -32,11 +32,9 @@ model:
 
   # LCGP params (lcgp/mggp_lcgp only)
   K: 50
-  rank: null
-  low_rank_mode: softplus
   precompute_knn: true
 
-  # MGGP params (mggp_svgp only)
+  # MGGP params (mggp_svgp/mggp_lcgp)
   group_diff_param: 1.0
   inducing_allocation: derived
 

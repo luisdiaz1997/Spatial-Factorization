@@ -80,18 +80,16 @@ def _load_analysis_results(model_dir: Path) -> dict:
         with open(enrichment_path) as f:
             results["gene_enrichment"] = json.load(f)
 
-    # Load Lu data (SVGP: Lu.pt, LCGP: Lu_diag.npy + Lu_V.npy)
-    lu_path = model_dir / "Lu.pt"
-    lu_diag_path = model_dir / "Lu_diag.npy"
-    lu_v_path = model_dir / "Lu_V.npy"
+    # Load Lu data (SVGP: Lu.pt, LCGP: Lu.npy)
+    lu_pt_path = model_dir / "Lu.pt"
+    lu_npy_path = model_dir / "Lu.npy"
 
-    if lu_path.exists():
+    if lu_pt_path.exists():
         import torch
-        results["Lu"] = torch.load(lu_path, map_location="cpu", weights_only=False)
+        results["Lu"] = torch.load(lu_pt_path, map_location="cpu", weights_only=False)
         results["is_lcgp"] = False
-    elif lu_diag_path.exists() and lu_v_path.exists():
-        results["Lu_diag"] = np.load(lu_diag_path)  # (L, M)
-        results["Lu_V"] = np.load(lu_v_path)        # (L, M, R)
+    elif lu_npy_path.exists():
+        results["Lu"] = np.load(lu_npy_path)  # (L, M, K)
         results["is_lcgp"] = True
 
     # Load Z (inducing point locations)
@@ -998,7 +996,11 @@ def run(config_path: str):
     Lu_data = results.get("Lu")
     Z_data = results.get("Z")
     if spatial and Z_data is not None:
-        if Lu_data is not None:
+        if is_lcgp:
+            # LCGP: Skip since M=N (all data points are inducing)
+            # The scales_spatial.png already shows uncertainty at all data points
+            print("  Skipping Lu inducing plot for LCGP (M=N, see scales_spatial.png instead)")
+        elif Lu_data is not None:
             # SVGP: Full Cholesky factor
             print("Generating Lu inducing-point uncertainty plot...")
             fig = plot_lu_scales_at_inducing(
@@ -1009,11 +1011,6 @@ def run(config_path: str):
             fig.savefig(figures_dir / "lu_scales_inducing.png", dpi=150, bbox_inches="tight")
             plt.close(fig)
             print(f"  Saved: {figures_dir}/lu_scales_inducing.png")
-        elif is_lcgp:
-            # LCGP: Skip since M=N (all data points are inducing)
-            # The scales_spatial.png already shows uncertainty at all data points
-            print("  Skipping Lu inducing plot for LCGP (M=N, see scales_spatial.png instead)")
-            pass
 
     # 1d. Cell-type spatial plot (data groups + inducing points side-by-side)
     if data.groups is not None:

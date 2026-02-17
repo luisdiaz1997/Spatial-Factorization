@@ -31,8 +31,6 @@ model:
 
   # LCGP params (lcgp/mggp_lcgp only)
   K: 50
-  rank: null
-  low_rank_mode: softplus
   precompute_knn: true
 
   # MGGP params (mggp_svgp only)

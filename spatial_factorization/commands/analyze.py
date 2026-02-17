@@ -100,17 +100,15 @@ def _load_model(model_dir: Path):
             # Fallback: check hyperparameters
             is_multigroup = hyperparams.get("multigroup", False)
 
-        # Detect LCGP vs SVGP from state dict (LCGP has Lu.diag._raw, SVGP has Lu._raw)
-        is_lcgp = "Lu.diag._raw" in prior_sd
+        # Detect LCGP vs SVGP from state dict
+        # LCGP has raw "Lu" parameter (L, M, K); SVGP has "Lu._raw" from CholeskyParameter
+        is_lcgp = "Lu" in prior_sd and "Lu._raw" not in prior_sd
 
         if is_lcgp:
             # LCGP reconstruction path
             from gpzoo.gp import LCGP, MGGP_LCGP
             from gpzoo.kernels import batched_Matern32, batched_MGGP_Matern32
-            from gpzoo.modules import LowRankPlusDiagonal
 
-            # Extract rank from Lu.V._raw shape: (L, M, R)
-            rank = prior_sd["Lu.V._raw"].shape[2] if "Lu.V._raw" in prior_sd else 10
             K = hyperparams.get("K", 50)
 
             if is_multigroup:
@@ -123,19 +121,19 @@ def _load_model(model_dir: Path):
                 )
                 gp = MGGP_LCGP(
                     kernel, dim=dim, M=M, n_groups=n_groups,
-                    jitter=1e-5, K=K, rank=rank,
+                    jitter=1e-5, K=K,
                 )
             else:
                 kernel = batched_Matern32(sigma=1.0, lengthscale=1.0)
                 gp = LCGP(
                     kernel, dim=dim, M=M,
-                    jitter=1e-5, K=K, rank=rank,
+                    jitter=1e-5, K=K,
                 )
 
-            # Replace Lu with LowRankPlusDiagonal
+            # Replace Lu with raw nn.Parameter matching saved shape (L, M, K)
             del gp.Lu
-            gp.Lu = LowRankPlusDiagonal(m=M, rank=rank, batch_size=L)
-            gp.mu = nn.Parameter(torch.randn(L, M) * 0.01)
+            gp.Lu = nn.Parameter(torch.randn(L, M, K))
+            gp.mu = nn.Parameter(torch.randn(L, M))
 
             # Load the trained prior state
             gp.load_state_dict(prior_sd)
@@ -657,17 +655,15 @@ def run(config_path: str):
         sd = gp.state_dict()
         Z = sd["Z"]                  # (M, 2) inducing locations
 
-        # Check if LCGP (has LowRankPlusDiagonal Lu) vs SVGP (has CholeskyParameter Lu)
-        is_lcgp = hasattr(gp.Lu, 'V')
+        # Check if LCGP (raw nn.Parameter Lu) vs SVGP (CholeskyParameter Lu)
+        # SVGP's CholeskyParameter has a _raw attribute; LCGP's plain Parameter does not
+        is_lcgp = not hasattr(gp.Lu, '_raw')
 
         if is_lcgp:
-            # LCGP: Save Lu components separately (diagonal + low-rank V)
-            # Lu.diag is (L, M), Lu.V is (L, M, R)
-            Lu_diag = gp.Lu.diag.data[sort_order, :]  # (L, M) reordered by Moran's I
-            Lu_V = gp.Lu.V.data[sort_order, :, :]     # (L, M, R) reordered by Moran's I
-            np.save(model_dir / "Lu_diag.npy", Lu_diag.detach().cpu().numpy())
-            np.save(model_dir / "Lu_V.npy", Lu_V.detach().cpu().numpy())
-            msg = f"  Saved LCGP Lu data: Lu_diag {tuple(Lu_diag.shape)}, Lu_V {tuple(Lu_V.shape)}, Z {tuple(Z.shape)}"
+            # LCGP: Save Lu as raw parameter (L, M, K)
+            Lu_raw = gp.Lu.data[sort_order, :, :]  # (L, M, K) reordered by Moran's I
+            np.save(model_dir / "Lu.npy", Lu_raw.detach().cpu().numpy())
+            msg = f"  Saved LCGP Lu data: Lu {tuple(Lu_raw.shape)}, Z {tuple(Z.shape)}"
         else:
             # SVGP: Save full Cholesky factor
             Lu_constrained = gp.Lu.data[sort_order, :, :]  # (L, M, M) reordered by Moran's I

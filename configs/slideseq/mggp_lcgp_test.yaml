@@ -27,8 +27,6 @@ model:
   group_diff_param: 1.0
   inducing_allocation: derived
   K: 50
-  rank: null
-  low_rank_mode: softplus
   precompute_knn: true
 
 training:

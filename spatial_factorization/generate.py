@@ -60,8 +60,6 @@ SVGP_ONLY_FIELDS = {
 LCGP_MODEL_FIELDS = {
     "local",
     "K",
-    "rank",
-    "low_rank_mode",
     "precompute_knn",
 }
 

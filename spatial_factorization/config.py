@@ -129,8 +129,6 @@ class Config:
             if is_local:
                 # LCGP-specific params
                 kwargs["K"] = self.model.get("K", 50)
-                kwargs["rank"] = self.model.get("rank", None)
-                kwargs["low_rank_mode"] = self.model.get("low_rank_mode", "softplus")
                 kwargs["precompute_knn"] = self.model.get("precompute_knn", True)
             else:
                 # SVGP-specific params (not used by LCGP)

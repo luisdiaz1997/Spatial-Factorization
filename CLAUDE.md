@@ -45,7 +45,6 @@ All stages are **implemented and working**.
 │  - spatial=True     │◄────────│  - LCGP, MGGP_LCGP  │
 │  - multigroup       │         │  - batched kernels   │
 │  - local (LCGP)     │         │  - CholeskyParameter │
-│                     │         │  - LowRankPlusDiagonal │
 └─────────────────────┘         └─────────────────────┘
 ```
 
@@ -171,8 +170,7 @@ outputs/slideseq/
 │   ├── factors.npy, scales.npy, loadings.npy
 │   ├── loadings_group_*.npy # Per-group loadings (computed post-hoc)
 │   ├── Z.npy                # (N, 2) ALL data points as inducing (M=N)
-│   ├── Lu_diag.npy          # (L, N) diagonal of low-rank+diagonal covariance
-│   ├── Lu_V.npy             # (L, N, R) low-rank component
+│   ├── Lu.npy               # (L, N, K) VNNGP-style Lu parameter (S = Lu @ Lu.T)
 │   ├── moran_i.csv, gene_enrichment.json, metrics.json
 │   └── figures/
 │       ├── (same as svgp, but NO lu_scales_inducing.png since M=N)
@@ -183,7 +181,7 @@ outputs/slideseq/
     ├── factors.npy, scales.npy, loadings.npy
     ├── loadings_group_*.npy
     ├── Z.npy, groupsZ.npy   # All data points + group assignments
-    ├── Lu_diag.npy, Lu_V.npy  # Low-rank+diagonal covariance components
+    ├── Lu.npy               # (L, N, K) VNNGP-style Lu parameter (S = Lu @ Lu.T)
     ├── moran_i.csv, gene_enrichment.json, metrics.json
     └── figures/
         ├── (same as mggp_svgp, but NO lu_scales_inducing.png)
@@ -236,16 +234,16 @@ This package does NOT implement models or training loops. It provides:
 | **pnmf** | `spatial=False` | None (GaussianPrior) | No | O(NL) |
 
 - **SVGP**: Sparse variational GP with M<<N inducing points, O(M²) covariance
-- **LCGP**: Locally conditioned GP with ALL N points as inducing, O(NR) low-rank+diagonal covariance (R≈50-100)
+- **LCGP**: Locally conditioned GP with ALL N points as inducing, VNNGP-style S=Lu@Lu.T covariance (K neighbors)
 
 ### 3. LCGP vs SVGP Trade-offs
 
 | Aspect | SVGP | LCGP |
 |--------|------|------|
 | Inducing points | M<<N (e.g., 3000) | M=N (all data) |
-| Covariance complexity | O(M²) full Cholesky | O(NR) low-rank+diagonal |
+| Covariance complexity | O(M²) full Cholesky | O(NK²) VNNGP-style S=Lu@Lu.T |
 | GPU memory | ~7.6 GB peak | ~7.6 GB peak |
-| Saved Lu | `Lu.pt` (L,M,M) ~344MB | `Lu_diag.npy` + `Lu_V.npy` ~90MB |
+| Saved Lu | `Lu.pt` (L,M,M) ~344MB | `Lu.npy` (L,N,K) |
 | Best for | Large datasets | When full spatial coverage needed |
 
 ### 4. Prior Selection and Model Loading
@@ -258,7 +256,7 @@ This package does NOT implement models or training loops. It provides:
 - `spatial=True, local=True, multigroup=True` → `MGGP_LCGP`
 
 **Loading:** `_load_model()` detects model type from saved state dict:
-1. **LCGP vs SVGP**: Check for `Lu.diag._raw` key (LCGP has it, SVGP has `Lu._raw`)
+1. **LCGP vs SVGP**: Check for raw `Lu` key without `Lu._raw` (LCGP has raw `Lu`, SVGP has `Lu._raw` from CholeskyParameter)
 2. **Multigroup vs not**: Check for `groupsZ` key in state dict
 3. Reconstruct appropriate GP class with correct kernel and covariance parameter type
 
@@ -437,13 +435,13 @@ This allows:
 | 3 | **DONE** | Analyze command (Moran's I, reconstruction, group loadings, enrichment) |
 | 4 | **DONE** | Figures command (spatial plots, enrichment, gene plots) |
 | 5 | **DONE** | Multiplex pipeline (parallel training, live status, GPU/CPU scheduling) |
-| 6 | **DONE** | LCGP integration (local=True support, LowRankPlusDiagonal covariance) |
+| 6 | **DONE** | LCGP integration (local=True support, VNNGP-style covariance) |
 
 ## Relationship to Other Repos
 
 | Repo | Purpose | Key Classes |
 |------|---------|-------------|
-| **GPzoo** | GP backends | `SVGP`, `MGGP_SVGP`, `LCGP`, `MGGP_LCGP`, `batched_Matern32`, `batched_MGGP_Matern32`, `CholeskyParameter`, `LowRankPlusDiagonal` |
+| **GPzoo** | GP backends | `SVGP`, `MGGP_SVGP`, `LCGP`, `MGGP_LCGP`, `batched_Matern32`, `batched_MGGP_Matern32`, `CholeskyParameter` |
 | **PNMF** | sklearn API | `PNMF` class, `multigroup` param, `local` param, `spatial=True`, transforms (`get_factors`, `_get_spatial_qF`, `transform_W`) |
 | **Spatial-Factorization** | Pipeline | Dataset loaders, configs, CLI commands, analysis, figures |
 
@@ -451,9 +449,9 @@ This allows:
 
 - `multigroup` default: `False`
 - `local` default: `False` (set `True` for LCGP)
-- `local=True` params: `K=50`, `rank=None`, `low_rank_mode='softplus'`, `precompute_knn=True`
+- `local=True` params: `K=50`, `precompute_knn=True`
 - Non-multigroup SVGP uses K-means inducing points + `batched_Matern32` kernel
-- LCGP uses all data points as inducing (M=N) with `LowRankPlusDiagonal` covariance
+- LCGP uses all data points as inducing (M=N) with VNNGP-style `S = Lu @ Lu.T` covariance
 
 ---
 
