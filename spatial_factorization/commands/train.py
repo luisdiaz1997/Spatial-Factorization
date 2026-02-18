@@ -218,6 +218,12 @@ def run(config_path: str, resume: bool = False):
         elbo_history, model = model.fit(data.Y.numpy(), return_history=True)
     train_time = time.perf_counter() - t0
 
+    if resume:
+        # _WarmStartPNMF is a local class that can't be pickled. Training is
+        # complete so the overrides are no longer needed; restore the base class
+        # so _save_model can pickle the model identically to a normal train run.
+        model.__class__ = PNMF
+
     max_iter = config.training.get("max_iter", 10000)
     print("\nTraining complete!")
     print(f"  Final ELBO:     {model.elbo_:.2f}")
