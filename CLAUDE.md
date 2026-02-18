@@ -269,7 +269,17 @@ The `prior` field in YAML/config is only used for:
 
 The analyze stage reorders all factor-related outputs by descending Moran's I before saving. Factor 0 always has the highest spatial autocorrelation. This applies to: `factors.npy`, `scales.npy`, `loadings.npy`, `Lu.pt`, group loadings, and gene enrichment. The `moran_i.csv` reflects the new order (already sorted descending).
 
-### 6. Groups vs No-Groups Pipeline Behavior
+### 6. `--resume` and Pickle Preservation
+
+`train --resume` warm-starts from a saved checkpoint using `_create_warm_start_pnmf`, which subclasses PNMF to inject the loaded prior and W instead of random initialization. After `fit()` completes, `model.__class__` is reset to `PNMF` before saving so that `_save_model` can pickle identically to a normal train run.
+
+**Why this matters:** PNMF training explicitly sets `Z.requires_grad=False`, `kernel.sigma.requires_grad=False`, and `kernel.lengthscale.requires_grad=False` on the GP prior. These flags are preserved in `model.pkl` but are NOT stored in `model.pth` (state dicts save values only, not `requires_grad`). If the pkl is missing or corrupt, `.pth` reconstruction via `_load_model` would load Z with `requires_grad=True`, putting Z in the optimizer and causing NaN gradients on the first backward step.
+
+**Picklability by model type:**
+- `pnmf`, `svgp`, `lcgp`: picklable — `model.pkl` is saved after every train/resume
+- `mggp_svgp`, `mggp_lcgp`: **not picklable** due to `MGGPWrapper` local class in GPzoo — always fall back to `.pth`
+
+### 7. Groups vs No-Groups Pipeline Behavior
 
 When `groups: false`:
 - **train**: Only passes `coordinates` to `model.fit()` (no `groups` arg)
@@ -294,6 +304,9 @@ spatial_factorization preprocess -c configs/slideseq/pnmf.yaml      # Run once p
 spatial_factorization train      -c configs/slideseq/svgp_test.yaml  # Model-specific
 spatial_factorization analyze    -c configs/slideseq/svgp_test.yaml
 spatial_factorization figures    -c configs/slideseq/svgp_test.yaml
+
+# Resume training from a checkpoint (appends to ELBO history)
+spatial_factorization train --resume -c configs/slideseq/svgp_test.yaml
 
 # Chain multiple stages with `run`
 spatial_factorization run train analyze figures -c configs/slideseq/svgp_test.yaml
@@ -436,6 +449,7 @@ This allows:
 | 4 | **DONE** | Figures command (spatial plots, enrichment, gene plots) |
 | 5 | **DONE** | Multiplex pipeline (parallel training, live status, GPU/CPU scheduling) |
 | 6 | **DONE** | LCGP integration (local=True support, VNNGP-style covariance) |
+| 7 | **DONE** | `--resume` flag for `train` (warm-start from checkpoint, append ELBO history) |
 
 ## Relationship to Other Repos
 
