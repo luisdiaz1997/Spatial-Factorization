@@ -67,10 +67,16 @@ Spatial-Factorization/
 │   │   └── figures.py         # Stage 4: Generate plots
 │   └── datasets/
 │       ├── base.py            # SpatialData container + load_preprocessed()
-│       ├── slideseq.py        # SlideseqV2 loader
-│       └── tenxvisium.py      # 10x Visium loader
+│       ├── slideseq.py        # SlideseqV2 loader (sq.datasets.slideseqv2)
+│       ├── tenxvisium.py      # 10x Visium squidpy loader (sq.datasets.visium_hne_adata)
+│       ├── sdmbench.py        # SDMBench Visium DLPFC loader (path-based, obs["Region"])
+│       ├── liver.py           # Liver MERFISH loader (healthy + diseased, obsm["X_spatial"])
+│       ├── merfish.py         # squidpy MERFISH loader (sq.datasets.merfish, 2D)
+│       ├── colon.py           # Colon Cancer Vizgen MERFISH loader (path + labels CSV)
+│       └── osmfish.py         # osmFISH SDMBench loader (path-based, dense X)
 ├── configs/slideseq/
-│   ├── general.yaml           # Superset config for multiplex training (generates 5 models)
+│   ├── general.yaml           # Reference config (n_components=10, num_inducing=3000, lengthscale=8.0, K=50)
+│   ├── general_test.yaml      # 200-epoch test
 │   ├── pnmf.yaml              # Non-spatial baseline
 │   ├── svgp.yaml              # SVGP (no groups, full training)
 │   ├── mggp_svgp.yaml         # MGGP_SVGP (groups, full training)
@@ -80,6 +86,30 @@ Spatial-Factorization/
 │   ├── svgp_no_groups_test.yaml # SVGP no groups (10 epochs, testing)
 │   ├── lcgp_test.yaml         # LCGP (10 epochs, testing)
 │   └── mggp_lcgp_test.yaml    # MGGP_LCGP (10 epochs, testing)
+├── configs/merfish/           # squidpy MERFISH (73K cells, 161 genes)
+│   ├── general.yaml
+│   └── general_test.yaml
+├── configs/liver/
+│   ├── healthy/               # Liver healthy MERFISH (90K cells, 317 genes)
+│   │   ├── general.yaml
+│   │   └── general_test.yaml
+│   └── diseased/              # Liver diseased MERFISH (310K cells, 317 genes)
+│       ├── general.yaml
+│       └── general_test.yaml
+├── configs/tenxvisium/        # squidpy 10x Visium H&E (~3K spots, ~15K genes)
+│   ├── general.yaml
+│   └── general_test.yaml
+├── configs/sdmbench/          # SDMBench Visium DLPFC (12 slides, ~4K spots, ~33K genes each)
+│   ├── 151507/
+│   │   ├── general.yaml
+│   │   └── general_test.yaml
+│   ├── 151508/ ... 151676/    # (same structure for all 12 slides)
+├── configs/osmfish/           # osmFISH SDMBench (4.8K cells, 33 genes)
+│   ├── general.yaml
+│   └── general_test.yaml
+└── configs/colon/             # Colon Cancer Vizgen MERFISH (~120K subsampled, 492 genes)
+    ├── general.yaml
+    └── general_test.yaml
 ├── tests/
 │   └── test_svgp_model.py     # SVGP model inspection tests
 ├── outputs/                   # Generated (git-ignored)
@@ -381,6 +411,10 @@ Parses both PNMF output formats:
 
 ## Available Configs
 
+All `general.yaml` files share the same model hyperparams: `n_components=10`, `num_inducing=3000`, `lengthscale=8.0`, `K=50`, `train_lengthscale=false`. Only `batch_size` and `y_batch_size` differ by dataset size.
+
+### slideseq (reference dataset)
+
 | Config | Model | Groups | Local | Epochs | Use |
 |--------|-------|--------|-------|--------|-----|
 | `general.yaml` | All 5 models | N/A | N/A | 20000 | Multiplex training |
@@ -394,6 +428,20 @@ Parses both PNMF output formats:
 | `svgp_test.yaml` | MGGP_SVGP | true | false | 10 | Quick testing |
 | `lcgp_test.yaml` | LCGP | false | true | 10 | Quick testing |
 | `mggp_lcgp_test.yaml` | MGGP_LCGP | true | true | 10 | Quick testing |
+
+### Other datasets (each has general.yaml + general_test.yaml)
+
+| Config dir | Dataset key | N | D | Groups | batch_size | y_batch_size |
+|-----------|-------------|---|---|--------|-----------|--------------|
+| `configs/merfish/` | `merfish` | 73K | 161 | `obs["Cell_class"]` | 15000 | 161 |
+| `configs/liver/healthy/` | `liver` | 90K | 317 | `obs["Cell_Type"]` | 13000 | 317 |
+| `configs/liver/diseased/` | `liver` | 310K | 317 | `obs["Cell_Type_final"]` | 13000 | 317 |
+| `configs/tenxvisium/` | `tenxvisium` | ~3K | ~15K | `obs["cluster"]` | 3000 | 2000 |
+| `configs/sdmbench/151507/` … `151676/` | `sdmbench` | ~4K | ~33K | `obs["Region"]` | 4221 | 2000 |
+| `configs/osmfish/` | `osmfish` | 4.8K | 33 | `obs["ClusterName"]` | 4839 | 33 |
+| `configs/colon/` | `colon` | ~120K* | 492 | CSV `cl46v1SubShort_ds` | 13000 | 492 |
+
+*colon subsampled with `subsample=10` from 1.2M cells
 
 ### Testing
 
@@ -443,13 +491,14 @@ This allows:
 | Stage | Status | Description |
 |-------|--------|-------------|
 | 0 | **DONE** | Setup & Installation |
-| 1 | **DONE** | Preprocess command |
+| 1 | **DONE** | Preprocess command (+ NaN filter: drops cells with NaN in coords/expression/groups) |
 | 2 | **DONE** | Train command (PNMF, SVGP, MGGP_SVGP, LCGP, MGGP_LCGP) |
 | 3 | **DONE** | Analyze command (Moran's I, reconstruction, group loadings, enrichment) |
 | 4 | **DONE** | Figures command (spatial plots, enrichment, gene plots) |
 | 5 | **DONE** | Multiplex pipeline (parallel training, live status, GPU/CPU scheduling) |
 | 6 | **DONE** | LCGP integration (local=True support, VNNGP-style covariance) |
 | 7 | **DONE** | `--resume` flag for `train` (warm-start from checkpoint, append ELBO history) |
+| 8 | **DONE** | Datasets integration (7 loaders: slideseq, tenxvisium, sdmbench, liver, merfish, colon, osmfish; configs for all datasets including 12 SDMBench slides and healthy/diseased liver) |
 
 ## Relationship to Other Repos
 

@@ -1,0 +1,53 @@
+# General config for Colon Cancer Vizgen MERFISH dataset
+# N=1.2M cells (subsampled to ~120K with subsample=10) × D=492 genes
+# Groups from external CSV (cl46v1SubShort_ds, ~50 cell types)
+# Use: spatial_factorization generate -c configs/colon/general.yaml
+# Use: spatial_factorization run all -c configs/colon/general.yaml
+
+name: colon
+seed: 67
+dataset: colon
+output_dir: outputs/colon
+
+preprocessing:
+  spatial_scale: 50.0
+  h5ad_path: /gladstone/engelhardt/lab/jcai/hdp/results/merfish/HuColonCa-FFPE-ImmuOnco-LH_VMSC02001_20220427_seed_2024_K100_T500_baysor_adata_mingenes0_mincounts10.h5ad
+  labels_path: /gladstone/engelhardt/pelka-collaboration/Vizgen_HuColonCa_20220427_prediction-labels.csv
+  group_column: cl46v1SubShort_ds
+  subsample: 10  # take every 10th cell (~120K cells)
+
+model:
+  # Common params
+  n_components: 10
+  mode: expanded
+  loadings_mode: multiplicative
+  training_mode: standard
+  E: 3
+
+  # Spatial GP params (svgp/mggp_svgp only)
+  kernel: Matern32
+  num_inducing: 3000
+  lengthscale: 8.0
+  sigma: 1.0
+  train_lengthscale: false
+  cholesky_mode: exp
+  diagonal_only: false
+
+  # LCGP params (lcgp/mggp_lcgp only)
+  K: 50
+  precompute_knn: true
+
+  # MGGP params
+  group_diff_param: 1.0
+  inducing_allocation: derived
+
+training:
+  max_iter: 20000
+  learning_rate: 2e-3
+  optimizer: Adam
+  tol: 1e-4
+  verbose: false
+  device: gpu
+  batch_size: 13000
+  y_batch_size: 492
+  shuffle: true

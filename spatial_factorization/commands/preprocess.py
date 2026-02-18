@@ -15,7 +15,52 @@ import numpy as np
 from scipy import sparse
 
 from ..config import Config
-from ..datasets import load_dataset
+from ..datasets import SpatialData, load_dataset
+
+
+def _filter_nans(data: SpatialData) -> SpatialData:
+    """Remove cells/spots with NaN in coordinates, expression, or groups.
+
+    Categorical NaN codes show up as -1 (pandas convention).
+    """
+    import torch
+
+    mask = np.ones(data.n_spots, dtype=bool)
+
+    # NaN in spatial coordinates
+    X_np = data.X.numpy()
+    mask &= ~np.any(np.isnan(X_np), axis=1)
+
+    # NaN in expression matrix
+    Y_np = data.Y.numpy()
+    mask &= ~np.any(np.isnan(Y_np), axis=1)
+
+    # Negative group codes indicate NaN categories (pandas categorical convention)
+    if data.groups is not None:
+        groups_np = data.groups.numpy()
+        mask &= groups_np >= 0
+
+    n_removed = int((~mask).sum())
+    if n_removed > 0:
+        print(f"  Removed {n_removed} cells/spots with NaN values")
+
+    if mask.all():
+        return data
+
+    t_mask = torch.from_numpy(mask)
+    idx = np.where(mask)[0]
+    spot_names = (
+        [data.spot_names[i] for i in idx] if data.spot_names is not None else None
+    )
+    return SpatialData(
+        X=data.X[t_mask],
+        Y=data.Y[t_mask],
+        groups=data.groups[t_mask] if data.groups is not None else None,
+        n_groups=data.n_groups,
+        gene_names=data.gene_names,
+        spot_names=spot_names,
+        group_names=data.group_names,
+    )
 
 
 def run(config_path: str):
@@ -33,7 +78,11 @@ def run(config_path: str):
 
     # Load raw data using dataset-specific loader
     data = load_dataset(config.dataset, config.preprocessing)
-    print(f"  Spots (N): {data.n_spots}, Genes (D): {data.n_genes}")
+    print(f"  Loaded: {data.n_spots} spots × {data.n_genes} genes")
+
+    # Drop any cells/spots with NaN in coordinates, expression, or group codes
+    data = _filter_nans(data)
+    print(f"  After NaN filter: {data.n_spots} spots × {data.n_genes} genes")
 
     # Create output directory for preprocessed data
     output_dir = Path(config.output_dir) / "preprocessed"

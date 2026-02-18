@@ -1,0 +1,44 @@
+# TEST config for SDMBench Visium DLPFC slide 151508 (200-epoch runs)
+# Use: spatial_factorization run all -c configs/sdmbench/151508/general_test.yaml
+
+name: sdmbench_151508_test
+seed: 67
+dataset: sdmbench
+output_dir: outputs/sdmbench_test/151508
+
+preprocessing:
+  spatial_scale: 50.0
+  path: /gladstone/engelhardt/home/lchumpitaz/gitclones/SDMBench/Data/151508.h5ad
+  region_column: Region
+
+model:
+  n_components: 12
+  mode: expanded
+  loadings_mode: multiplicative
+  training_mode: standard
+  E: 3
+
+  kernel: Matern32
+  num_inducing: 4000
+  lengthscale: 10.0
+  sigma: 1.0
+  train_lengthscale: false
+  cholesky_mode: exp
+  diagonal_only: false
+
+  K: 50
+  precompute_knn: true
+
+  group_diff_param: 1.0
+  inducing_allocation: derived
+
+training:
+  max_iter: 200
+  learning_rate: 2e-3
+  optimizer: Adam
+  tol: 1e-4
+  verbose: false
+  device: gpu
+  batch_size: 4221
+  y_batch_size: 2000
+  shuffle: true

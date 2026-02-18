@@ -1,0 +1,50 @@
+# General config for osmFISH SDMBench dataset (mouse somatosensory cortex)
+# N=4,839 cells × D=33 genes, groups = ClusterName
+# Use: spatial_factorization generate -c configs/osmfish/general.yaml
+# Use: spatial_factorization run all -c configs/osmfish/general.yaml
+
+name: osmfish
+seed: 67
+dataset: osmfish
+output_dir: outputs/osmfish
+
+preprocessing:
+  spatial_scale: 50.0
+  path: /gladstone/engelhardt/home/lchumpitaz/gitclones/SDMBench/Data/osmfish.h5ad
+  group_column: ClusterName
+
+model:
+  # Common params (n_components <= D=33 genes)
+  n_components: 10
+  mode: expanded
+  loadings_mode: multiplicative
+  training_mode: standard
+  E: 3
+
+  # Spatial GP params (svgp/mggp_svgp only)
+  kernel: Matern32
+  num_inducing: 3000
+  lengthscale: 8.0
+  sigma: 1.0
+  train_lengthscale: false
+  cholesky_mode: exp
+  diagonal_only: false
+
+  # LCGP params (lcgp/mggp_lcgp only)
+  K: 50
+  precompute_knn: true
+
+  # MGGP params
+  group_diff_param: 1.0
+  inducing_allocation: derived
+
+training:
+  max_iter: 20000
+  learning_rate: 2e-3
+  optimizer: Adam
+  tol: 1e-4
+  verbose: false
+  device: gpu
+  batch_size: 4839
+  y_batch_size: 33
+  shuffle: true

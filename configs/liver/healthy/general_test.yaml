@@ -1,0 +1,48 @@
+# TEST config for Liver MERFISH healthy dataset (200-epoch runs)
+# Use: spatial_factorization run all -c configs/liver/healthy/general_test.yaml
+
+name: liver_healthy_test
+seed: 67
+dataset: liver
+output_dir: outputs/liver_test/healthy
+
+preprocessing:
+  spatial_scale: 50.0
+  path: /gladstone/engelhardt/lab/lchumpitaz/datasets/liver/adata_healthy_merfish.h5ad
+  cell_type_column: Cell_Type
+
+model:
+  # Common params
+  n_components: 12
+  mode: expanded
+  loadings_mode: multiplicative
+  training_mode: standard
+  E: 3
+
+  # Spatial GP params (svgp/mggp_svgp only)
+  kernel: Matern32
+  num_inducing: 3000
+  lengthscale: 10.0
+  sigma: 1.0
+  train_lengthscale: false
+  cholesky_mode: exp
+  diagonal_only: false
+
+  # LCGP params (lcgp/mggp_lcgp only)
+  K: 50
+  precompute_knn: true
+
+  # MGGP params
+  group_diff_param: 1.0
+  inducing_allocation: derived
+
+training:
+  max_iter: 200
+  learning_rate: 2e-3
+  optimizer: Adam
+  tol: 1e-4
+  verbose: false
+  device: gpu
+  batch_size: 13000
+  y_batch_size: 317
+  shuffle: true
