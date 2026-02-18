@@ -1,4 +1,4 @@
-# TEST config for Colon Cancer MERFISH dataset (200-epoch runs)
+# TEST config for Colon Cancer MERFISH dataset (200-epoch runs, full data)
 # Use: spatial_factorization run all -c configs/colon/general_test.yaml
 
 name: colon_test
@@ -11,7 +11,8 @@ preprocessing:
   h5ad_path: /gladstone/engelhardt/lab/jcai/hdp/results/merfish/HuColonCa-FFPE-ImmuOnco-LH_VMSC02001_20220427_seed_2024_K100_T500_baysor_adata_mingenes0_mincounts10.h5ad
   labels_path: /gladstone/engelhardt/pelka-collaboration/Vizgen_HuColonCa_20220427_prediction-labels.csv
   group_column: cl46v1SubShort_ds
-  subsample: 10  # take every 10th cell (~120K cells)
+  subsample: ~  # no subsampling (full 1.2M cells)
+  min_group_fraction: 0.01  # drop groups with <1% of total cells
 
 model:
   # Common params

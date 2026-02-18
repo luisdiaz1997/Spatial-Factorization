@@ -10,6 +10,7 @@ preprocessing:
   spatial_scale: 50.0
   group_column: Cell_class
 
+  min_group_fraction: 0.01  # drop groups with <1% of total cells
 model:
   # Common params
   n_components: 12

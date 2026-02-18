@@ -11,6 +11,7 @@ preprocessing:
   path: /gladstone/engelhardt/home/lchumpitaz/gitclones/SDMBench/Data/151671.h5ad
   region_column: Region
 
+  min_group_fraction: 0.01  # drop groups with <1% of total cells
 model:
   n_components: 12
   mode: expanded

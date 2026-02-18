@@ -12,6 +12,7 @@ preprocessing:
   path: /gladstone/engelhardt/lab/lchumpitaz/datasets/liver/adata_healthy_merfish.h5ad
   cell_type_column: Cell_Type
 
+  min_group_fraction: 0.01  # drop groups with <1% of total cells
 model:
   # Common params
   n_components: 10

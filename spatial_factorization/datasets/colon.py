@@ -17,8 +17,7 @@ class ColonLoader(DatasetLoader):
     Coordinates: obsm["spatial"] as pandas DataFrame (must sort by index).
     Expression: adata.X (no .raw).
 
-    Due to dataset size (1.2M cells), use subsample param (e.g. subsample=10
-    for ::10 subsampling to ~120K cells).
+    Full dataset: 1.2M cells. Use subsample param (int step) to downsample if needed.
     """
 
     DEFAULTS = {
@@ -33,7 +32,7 @@ class ColonLoader(DatasetLoader):
             "Vizgen_HuColonCa_20220427_prediction-labels.csv"
         ),
         "group_column": "cl46v1SubShort_ds",
-        "subsample": 10,  # take every 10th cell (~120K cells)
+        "subsample": None,  # no subsampling by default
     }
 
     def load(self, preprocessing: dict) -> SpatialData:

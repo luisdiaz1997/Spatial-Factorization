@@ -61,7 +61,7 @@ Spatial-Factorization/
 │   ├── runner.py              # Parallel job runner with GPU/CPU resource management
 │   ├── status.py              # Live status display for parallel training (rich)
 │   ├── commands/
-│   │   ├── preprocess.py      # Stage 1: Standardize data format
+│   │   ├── preprocess.py      # Stage 1: Standardize data format (NaN filter, small-group filter)
 │   │   ├── train.py           # Stage 2: Train PNMF model
 │   │   ├── analyze.py         # Stage 3: Compute metrics, factors, loadings
 │   │   └── figures.py         # Stage 4: Generate plots
@@ -107,7 +107,7 @@ Spatial-Factorization/
 ├── configs/osmfish/           # osmFISH SDMBench (4.8K cells, 33 genes)
 │   ├── general.yaml
 │   └── general_test.yaml
-└── configs/colon/             # Colon Cancer Vizgen MERFISH (~120K subsampled, 492 genes)
+└── configs/colon/             # Colon Cancer Vizgen MERFISH (1.2M cells full, 492 genes)
     ├── general.yaml
     └── general_test.yaml
 ├── tests/
@@ -309,7 +309,18 @@ The analyze stage reorders all factor-related outputs by descending Moran's I be
 - `pnmf`, `svgp`, `lcgp`: picklable — `model.pkl` is saved after every train/resume
 - `mggp_svgp`, `mggp_lcgp`: **not picklable** due to `MGGPWrapper` local class in GPzoo — always fall back to `.pth`
 
-### 7. Groups vs No-Groups Pipeline Behavior
+### 7. Preprocessing Filters
+
+**NaN filter** (`_filter_nans`): drops cells where coords, expression, or group code is NaN. Also catches groups whose name is `None` or float NaN (explicit NaN category).
+
+**Small-group filter** (`_filter_small_groups`): drops cells belonging to groups smaller than the threshold, then re-encodes surviving codes contiguously (0..G'-1). Relative order of surviving groups is preserved.
+- Threshold set via `min_group_fraction` (fraction of total cells, e.g. `0.01` = 1%) or `min_group_size` (absolute, default 10)
+- `min_group_fraction` takes precedence when set
+- If no groups are removed, data is returned unchanged (codes identical to loader output)
+- All `general.yaml` configs use `min_group_fraction: 0.01`
+- Colon additionally has `subsample: ~` (no subsampling, full 1.2M cells)
+
+### 8. Groups vs No-Groups Pipeline Behavior
 
 When `groups: false`:
 - **train**: Only passes `coordinates` to `model.fit()` (no `groups` arg)
@@ -439,9 +450,7 @@ All `general.yaml` files share the same model hyperparams: `n_components=10`, `n
 | `configs/tenxvisium/` | `tenxvisium` | ~3K | ~15K | `obs["cluster"]` | 3000 | 2000 |
 | `configs/sdmbench/151507/` … `151676/` | `sdmbench` | ~4K | ~33K | `obs["Region"]` | 4221 | 2000 |
 | `configs/osmfish/` | `osmfish` | 4.8K | 33 | `obs["ClusterName"]` | 4839 | 33 |
-| `configs/colon/` | `colon` | ~120K* | 492 | CSV `cl46v1SubShort_ds` | 13000 | 492 |
-
-*colon subsampled with `subsample=10` from 1.2M cells
+| `configs/colon/` | `colon` | 1.2M | 492 | CSV `cl46v1SubShort_ds` | 13000 | 492 |
 
 ### Testing
 
@@ -491,7 +500,7 @@ This allows:
 | Stage | Status | Description |
 |-------|--------|-------------|
 | 0 | **DONE** | Setup & Installation |
-| 1 | **DONE** | Preprocess command (+ NaN filter: drops cells with NaN in coords/expression/groups) |
+| 1 | **DONE** | Preprocess command (+ NaN filter: drops cells with NaN in coords/expression/groups; + small-group filter: drops groups below `min_group_fraction` of total cells, re-encodes codes) |
 | 2 | **DONE** | Train command (PNMF, SVGP, MGGP_SVGP, LCGP, MGGP_LCGP) |
 | 3 | **DONE** | Analyze command (Moran's I, reconstruction, group loadings, enrichment) |
 | 4 | **DONE** | Figures command (spatial plots, enrichment, gene plots) |

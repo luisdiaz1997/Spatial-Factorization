@@ -11,6 +11,7 @@ preprocessing:
   path: /gladstone/engelhardt/home/lchumpitaz/gitclones/SDMBench/Data/osmfish.h5ad
   group_column: ClusterName
 
+  min_group_fraction: 0.01  # drop groups with <1% of total cells
 model:
   # Common params
   n_components: 10

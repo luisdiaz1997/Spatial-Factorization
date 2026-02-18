@@ -1,5 +1,5 @@
 # General config for Colon Cancer Vizgen MERFISH dataset
-# N=1.2M cells (subsampled to ~120K with subsample=10) × D=492 genes
+# N=1.2M cells × D=492 genes
 # Groups from external CSV (cl46v1SubShort_ds, ~50 cell types)
 # Use: spatial_factorization generate -c configs/colon/general.yaml
 # Use: spatial_factorization run all -c configs/colon/general.yaml
@@ -14,7 +14,8 @@ preprocessing:
   h5ad_path: /gladstone/engelhardt/lab/jcai/hdp/results/merfish/HuColonCa-FFPE-ImmuOnco-LH_VMSC02001_20220427_seed_2024_K100_T500_baysor_adata_mingenes0_mincounts10.h5ad
   labels_path: /gladstone/engelhardt/pelka-collaboration/Vizgen_HuColonCa_20220427_prediction-labels.csv
   group_column: cl46v1SubShort_ds
-  subsample: 10  # take every 10th cell (~120K cells)
+  subsample: ~  # no subsampling (full 1.2M cells)
+  min_group_fraction: 0.01  # drop groups with <1% of total cells
 
 model:
   # Common params
