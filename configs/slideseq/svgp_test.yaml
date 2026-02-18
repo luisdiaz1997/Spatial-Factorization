@@ -1,7 +1,8 @@
-name: slideseq_svgp
+# MGGP_SVGP test config (10 epochs, with groups, for quick testing)
+name: slideseq_mggp_svgp_test
 seed: 67
 dataset: slideseq
-output_dir: outputs/slideseq
+output_dir: outputs/slideseq_test
 
 preprocessing:
   spatial_scale: 50.0
@@ -12,25 +13,28 @@ preprocessing:
 model:
   training_mode: standard
   mode: expanded
-  E: 3
   loadings_mode: multiplicative
+  E: 3
   n_components: 10
   spatial: true
   prior: SVGP
+  num_inducing: 3000
+  train_lengthscale: false
   lengthscale: 8.0
   kernel: Matern32
-  train_lengthscale: false
-  sigma: 1.0
-  num_inducing: 3000
   cholesky_mode: exp
   diagonal_only: false
+  sigma: 1.0
+  groups: true
+  inducing_allocation: derived
+  group_diff_param: 1.0
 
 training:
-  max_iter: 20000
+  max_iter: 10
   learning_rate: 2e-3
   optimizer: Adam
   tol: 1e-4
-  verbose: false
+  verbose: true
   device: gpu
   batch_size: 7000
   y_batch_size: 2000

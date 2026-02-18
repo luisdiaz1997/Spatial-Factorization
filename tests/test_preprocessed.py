@@ -6,13 +6,14 @@ from pathlib import Path
 import numpy as np
 import pytest
 import torch
+from scipy import sparse
 
 
 def load_and_verify_preprocessed(output_dir: Path, dataset_name: str):
     """Generic test to verify preprocessed data has all required fields.
 
     This test verifies:
-    1. All required files exist (X.npy, Y.npy, C.npy, metadata.json)
+    1. All required files exist (X.npy, Y.npz or Y.npy, C.npy, metadata.json)
     2. Shapes are consistent
     3. All metadata fields are populated
     4. Group names are provided
@@ -31,16 +32,25 @@ def load_and_verify_preprocessed(output_dir: Path, dataset_name: str):
     if not prep_dir.exists():
         pytest.skip(f"Preprocessed data not found for {dataset_name}: {prep_dir}")
 
-    # Check all required files exist
-    required_files = ["X.npy", "Y.npy", "C.npy", "metadata.json"]
+    # Check all required files exist (Y can be .npz or .npy)
+    required_files = ["X.npy", "C.npy", "metadata.json"]
     for fname in required_files:
         fpath = prep_dir / fname
         if not fpath.exists():
             pytest.fail(f"Missing required file: {fpath}")
 
-    # Load arrays
+    # Y can be sparse (.npz) or dense (.npy)
+    y_npz = prep_dir / "Y.npz"
+    y_npy = prep_dir / "Y.npy"
+    if y_npz.exists():
+        Y = sparse.load_npz(y_npz)
+    elif y_npy.exists():
+        Y = np.load(y_npy)
+    else:
+        pytest.fail(f"Missing required file: {y_npz} or {y_npy}")
+
+    # Load other arrays
     X = np.load(prep_dir / "X.npy")
-    Y = np.load(prep_dir / "Y.npy")
     C = np.load(prep_dir / "C.npy")
 
     # Load metadata
@@ -48,15 +58,21 @@ def load_and_verify_preprocessed(output_dir: Path, dataset_name: str):
         metadata = json.load(f)
 
     # Verify shapes: X is (N, 2), Y is (N, D), C is (N,)
+    N = X.shape[0]
     assert X.ndim == 2 and X.shape[1] == 2, f"{dataset_name}: X should be (N, 2)"
-    assert Y.ndim == 2, f"{dataset_name}: Y should be 2D"
     assert C.ndim == 1, f"{dataset_name}: C should be 1D"
 
-    N = X.shape[0]
-    D = Y.shape[1]  # Y is (N, D) - spots x genes
+    # Y shape verification (sparse or dense)
+    if hasattr(Y, 'shape'):
+        Y_shape = Y.shape
+    else:
+        Y_shape = Y.shape
 
-    assert Y.shape[0] == N, f"{dataset_name}: Y shape mismatch (spots don't match X)"
+    assert len(Y_shape) == 2, f"{dataset_name}: Y should be 2D, got shape {Y_shape}"
+    assert Y_shape[0] == N, f"{dataset_name}: Y spots ({Y_shape[0]}) don't match X ({N})"
     assert C.shape[0] == N, f"{dataset_name}: C shape mismatch (doesn't match X)"
+
+    D = Y_shape[1]  # Number of genes
 
     # Verify metadata fields
     required_meta_fields = ["n_spots", "n_genes", "n_groups", "gene_names",

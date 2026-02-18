@@ -1,29 +1,37 @@
-# SlideseqV2 with LCGP prior
-
 name: slideseq_lcgp
-seed: 42
+seed: 67
+dataset: slideseq
+output_dir: outputs/slideseq
 
-dataset:
-  name: slideseq
+preprocessing:
   spatial_scale: 50.0
   filter_mt: true
   min_counts: 100
   min_cells: 10
 
 model:
+  training_mode: standard
+  mode: expanded
+  E: 3
+  loadings_mode: multiplicative
   n_components: 10
   spatial: true
-  gp_class: LCGP
-  lengthscale: 4.0
+  prior: LCGP
+  lengthscale: 8.0
+  kernel: Matern32
+  train_lengthscale: false
+  sigma: 1.0
+  local: true
+  precompute_knn: true
   K: 50
-  mode: expanded
-  loadings_mode: projected
 
 training:
-  max_iter: 10000
-  learning_rate: 0.01
+  max_iter: 20000
+  learning_rate: 2e-3
   optimizer: Adam
-  verbose: true
-
-output:
-  dir: outputs/slideseq/lcgp
+  tol: 1e-4
+  verbose: false
+  device: gpu
+  batch_size: 7000
+  y_batch_size: 2000
+  shuffle: true

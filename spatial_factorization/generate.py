@@ -15,9 +15,11 @@ from .config import Config
 
 # Model variants to generate from a general config
 MODEL_VARIANTS = [
-    {"name": "pnmf", "spatial": False, "groups": False, "prior": "GaussianPrior"},
-    {"name": "svgp", "spatial": True, "groups": False, "prior": "SVGP"},
-    {"name": "mggp_svgp", "spatial": True, "groups": True, "prior": "SVGP"},
+    {"name": "pnmf", "spatial": False, "groups": False, "prior": "GaussianPrior", "local": False},
+    {"name": "svgp", "spatial": True, "groups": False, "prior": "SVGP", "local": False},
+    {"name": "mggp_svgp", "spatial": True, "groups": True, "prior": "SVGP", "local": False},
+    {"name": "lcgp", "spatial": True, "groups": False, "prior": "LCGP", "local": True},
+    {"name": "mggp_lcgp", "spatial": True, "groups": True, "prior": "LCGP", "local": True},
 ]
 
 # Field categories for filtering
@@ -45,6 +47,20 @@ GROUPS_MODEL_FIELDS = {
     "groups",
     "group_diff_param",
     "inducing_allocation",
+}
+
+# SVGP-specific fields (not used by LCGP)
+SVGP_ONLY_FIELDS = {
+    "num_inducing",
+    "cholesky_mode",
+    "diagonal_only",
+}
+
+# LCGP-specific fields (not used by SVGP)
+LCGP_MODEL_FIELDS = {
+    "local",
+    "K",
+    "precompute_knn",
 }
 
 
@@ -124,9 +140,25 @@ def _generate_model_config(
     if is_spatial:
         model_dict["spatial"] = True
         model_dict["prior"] = variant["prior"]
+        is_local = variant.get("local", False)
+
+        # Add core spatial fields (kernel, lengthscale, sigma, train_lengthscale)
         for key in SPATIAL_MODEL_FIELDS:
-            if key in config.model and key != "spatial":
+            if key in config.model and key not in ("spatial", "num_inducing", "cholesky_mode", "diagonal_only"):
                 model_dict[key] = config.model[key]
+
+        if is_local:
+            # LCGP: include LCGP-specific fields, exclude SVGP-only fields
+            model_dict["local"] = True
+            for key in LCGP_MODEL_FIELDS:
+                if key in config.model and key != "local":
+                    model_dict[key] = config.model[key]
+            # Note: SVGP_ONLY_FIELDS are NOT included for LCGP
+        else:
+            # SVGP: include SVGP-only fields
+            for key in SVGP_ONLY_FIELDS:
+                if key in config.model:
+                    model_dict[key] = config.model[key]
 
         # Add group fields if applicable
         if is_groups:

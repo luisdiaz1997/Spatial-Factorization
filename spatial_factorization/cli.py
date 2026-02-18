@@ -35,9 +35,11 @@ def preprocess(config):
 
 @cli.command()
 @click.option("--config", "-c", required=True, type=click.Path(exists=True), help="Path to config YAML")
-def train(config):
+@click.option("--resume", is_flag=True, default=False, help="Resume training from saved checkpoint, appending to ELBO history")
+def train(config, resume):
     """Train a PNMF model."""
-    _run_stage("train", config)
+    from .commands import train as train_cmd
+    train_cmd.run(config, resume=resume)
 
 
 @cli.command()

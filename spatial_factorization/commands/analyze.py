@@ -37,15 +37,25 @@ def _load_model(model_dir: Path):
 
     For spatial models, pickle fails due to MGGPWrapper, so we reconstruct
     the model architecture directly from GPzoo and load the state dict.
+
+    When CUDA is not available, we prioritize .pth files which support map_location.
     """
-    # Try pickle first (works for non-spatial models)
+    import torch
+
     pkl_path = model_dir / "model.pkl"
-    if pkl_path.exists():
+    pth_path = model_dir / "model.pth"
+
+    # If CUDA is not available, try .pth first (it uses map_location='cpu')
+    if not torch.cuda.is_available() and pth_path.exists():
+        # Fall through to .pth loading below
+        pass
+    elif pkl_path.exists():
+        # Try pickle first (works for non-spatial models on matching device)
         try:
             with open(pkl_path, "rb") as f:
                 return pickle.load(f)
-        except (AttributeError, TypeError, EOFError, pickle.PicklingError):
-            # Pickle failed (likely spatial model), load from .pth
+        except (AttributeError, TypeError, EOFError, pickle.PicklingError, RuntimeError):
+            # Pickle failed (likely spatial model or CUDA tensor on CPU-only), load from .pth
             pass
 
     # Load from torch state dict and reconstruct
@@ -90,41 +100,89 @@ def _load_model(model_dir: Path):
             # Fallback: check hyperparameters
             is_multigroup = hyperparams.get("multigroup", False)
 
-        if is_multigroup:
-            from gpzoo.gp import MGGP_SVGP
-            from gpzoo.kernels import batched_MGGP_Matern32
+        # Detect LCGP vs SVGP from state dict
+        # LCGP has raw "Lu" parameter (L, M, K); SVGP has "Lu._raw" from CholeskyParameter
+        is_lcgp = "Lu" in prior_sd and "Lu._raw" not in prior_sd
 
-            groupsZ = prior_sd["groupsZ"]      # (M,)
-            n_groups = int(groupsZ.max().item()) + 1
+        if is_lcgp:
+            # LCGP reconstruction path
+            from gpzoo.gp import LCGP, MGGP_LCGP
+            from gpzoo.kernels import batched_Matern32, batched_MGGP_Matern32
 
-            kernel = batched_MGGP_Matern32(
-                sigma=1.0, lengthscale=1.0,
-                group_diff_param=10.0, n_groups=n_groups,
-            )
-            gp = MGGP_SVGP(
-                kernel, dim=dim, M=M, n_groups=n_groups,
-                jitter=1e-5, cholesky_mode="exp", diagonal_only=False,
-            )
+            K = hyperparams.get("K", 50)
+
+            if is_multigroup:
+                groupsZ = prior_sd["groupsZ"]      # (M,)
+                n_groups = int(groupsZ.max().item()) + 1
+
+                kernel = batched_MGGP_Matern32(
+                    sigma=1.0, lengthscale=1.0,
+                    group_diff_param=10.0, n_groups=n_groups,
+                )
+                gp = MGGP_LCGP(
+                    kernel, dim=dim, M=M, n_groups=n_groups,
+                    jitter=1e-5, K=K,
+                )
+            else:
+                kernel = batched_Matern32(sigma=1.0, lengthscale=1.0)
+                gp = LCGP(
+                    kernel, dim=dim, M=M,
+                    jitter=1e-5, K=K,
+                )
+
+            # Replace Lu with raw nn.Parameter matching saved shape (L, M, K)
+            del gp.Lu
+            gp.Lu = nn.Parameter(torch.randn(L, M, K))
+            gp.mu = nn.Parameter(torch.randn(L, M))
+
+            # Load the trained prior state
+            gp.load_state_dict(prior_sd)
+            model._prior = gp
+
+            # Set KNN indices (needed for LCGP forward pass)
+            gp.knn_idx = gp.calculate_knn(Z)[:, :-1]  # exclude self
+            gp.knn_idz = gp.knn_idx
+
+            # Mark model as local (for transform functions)
+            model.local = True
+
         else:
-            from gpzoo.gp import SVGP
-            from gpzoo.kernels import batched_Matern32
+            # SVGP/MGGP_SVGP reconstruction path
+            if is_multigroup:
+                from gpzoo.gp import MGGP_SVGP
+                from gpzoo.kernels import batched_MGGP_Matern32
 
-            kernel = batched_Matern32(
-                sigma=1.0, lengthscale=1.0,
-            )
-            gp = SVGP(
-                kernel, dim=dim, M=M,
-                jitter=1e-5, cholesky_mode="exp", diagonal_only=False,
-            )
+                groupsZ = prior_sd["groupsZ"]      # (M,)
+                n_groups = int(groupsZ.max().item()) + 1
 
-        # Replace mu and Lu with correct batched shapes (L, M) and (L, M, M)
-        del gp.Lu
-        gp.Lu = CholeskyParameter((L, M), mode="exp", diagonal_only=False)
-        gp.mu = nn.Parameter(torch.randn(L, M) * 0.01)
+                kernel = batched_MGGP_Matern32(
+                    sigma=1.0, lengthscale=1.0,
+                    group_diff_param=10.0, n_groups=n_groups,
+                )
+                gp = MGGP_SVGP(
+                    kernel, dim=dim, M=M, n_groups=n_groups,
+                    jitter=1e-5, cholesky_mode="exp", diagonal_only=False,
+                )
+            else:
+                from gpzoo.gp import SVGP
+                from gpzoo.kernels import batched_Matern32
 
-        # Load the trained prior state
-        gp.load_state_dict(prior_sd)
-        model._prior = gp
+                kernel = batched_Matern32(
+                    sigma=1.0, lengthscale=1.0,
+                )
+                gp = SVGP(
+                    kernel, dim=dim, M=M,
+                    jitter=1e-5, cholesky_mode="exp", diagonal_only=False,
+                )
+
+            # Replace mu and Lu with correct batched shapes (L, M) and (L, M, M)
+            del gp.Lu
+            gp.Lu = CholeskyParameter((L, M), mode="exp", diagonal_only=False)
+            gp.mu = nn.Parameter(torch.randn(L, M) * 0.01)
+
+            # Load the trained prior state
+            gp.load_state_dict(prior_sd)
+            model._prior = gp
 
         # Reconstruct PoissonFactorization with a dummy y (only shape matters)
         model_sd = state["model_state_dict"]
@@ -145,7 +203,7 @@ def _load_model(model_dir: Path):
         # Infer shapes from state dict
         # GaussianPrior.mean is (L, N)
         L, N = prior_sd["mean"].shape
-        D = model_sd["W.param"].shape[0]
+        D = n_features  # Already computed from state["components"] above
 
         dummy_y = torch.empty(D, N)
         prior = GaussianPrior(y=dummy_y, L=L)
@@ -594,12 +652,25 @@ def run(config_path: str):
     if spatial:
         import torch as _torch
         gp = model._prior
-        Lu_constrained = gp.Lu.data[sort_order, :, :]  # (L, M, M) reordered by Moran's I
         sd = gp.state_dict()
         Z = sd["Z"]                  # (M, 2) inducing locations
-        _torch.save(Lu_constrained, model_dir / "Lu.pt")
+
+        # Check if LCGP (raw nn.Parameter Lu) vs SVGP (CholeskyParameter Lu)
+        # SVGP's CholeskyParameter has a _raw attribute; LCGP's plain Parameter does not
+        is_lcgp = not hasattr(gp.Lu, '_raw')
+
+        if is_lcgp:
+            # LCGP: Save Lu as raw parameter (L, M, K)
+            Lu_raw = gp.Lu.data[sort_order, :, :]  # (L, M, K) reordered by Moran's I
+            np.save(model_dir / "Lu.npy", Lu_raw.detach().cpu().numpy())
+            msg = f"  Saved LCGP Lu data: Lu {tuple(Lu_raw.shape)}, Z {tuple(Z.shape)}"
+        else:
+            # SVGP: Save full Cholesky factor
+            Lu_constrained = gp.Lu.data[sort_order, :, :]  # (L, M, M) reordered by Moran's I
+            _torch.save(Lu_constrained, model_dir / "Lu.pt")
+            msg = f"  Saved inducing-point data: Lu {tuple(Lu_constrained.shape)}, Z {tuple(Z.shape)}"
+
         np.save(model_dir / "Z.npy", Z.detach().cpu().numpy())
-        msg = f"  Saved inducing-point data: Lu {tuple(Lu_constrained.shape)}, Z {tuple(Z.shape)}"
         if "groupsZ" in sd:
             groupsZ = sd["groupsZ"]  # (M,) inducing point group assignments
             np.save(model_dir / "groupsZ.npy", groupsZ.detach().cpu().numpy())

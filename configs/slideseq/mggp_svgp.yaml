@@ -12,21 +12,21 @@ preprocessing:
 model:
   training_mode: standard
   mode: expanded
-  loadings_mode: multiplicative
   E: 3
+  loadings_mode: multiplicative
   n_components: 10
   spatial: true
   prior: SVGP
-  num_inducing: 3000
-  train_lengthscale: false
   lengthscale: 8.0
   kernel: Matern32
+  train_lengthscale: false
+  sigma: 1.0
+  num_inducing: 3000
   cholesky_mode: exp
   diagonal_only: false
-  sigma: 1.0
   groups: true
-  inducing_allocation: derived
   group_diff_param: 1.0
+  inducing_allocation: derived
 
 training:
   max_iter: 20000

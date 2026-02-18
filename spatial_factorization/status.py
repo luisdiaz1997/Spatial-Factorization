@@ -18,7 +18,9 @@ from rich.table import Table
 class JobStatus:
     """Per-job state for status tracking."""
 
-    name: str
+    name: str  # Unique key: "{model}_{task}" e.g., "pnmf_train"
+    model: str  # Model name: "pnmf", "svgp", etc.
+    task: str  # Task type: "train" or "analyze"
     config_path: Path
     device: str
     status: str  # "pending", "running", "completed", "failed"
@@ -69,37 +71,48 @@ class StatusManager:
     def _make_table(self) -> Table:
         """Build the status table."""
         table = Table(title="Training Progress")
-        table.add_column("Model", style="cyan", width=12)
+        table.add_column("Job", style="cyan", width=12)
+        table.add_column("Task", width=10)
         table.add_column("Device", width=8)
         table.add_column("Status", width=10)
         table.add_column("Epoch", width=12)
-        table.add_column("ELBO", width=12)
-        table.add_column("Remaining", width=10)
-        table.add_column("Elapsed", width=10)
+        table.add_column("ELBO", width=16)
+        table.add_column("Time", width=16)
 
         status_styles = {
             "pending": "dim",
             "running": "yellow",
+            "training": "yellow",
+            "analyzing": "yellow",
             "completed": "green",
             "failed": "red",
+            "skipped": "dim",
         }
 
-        for job in self.jobs.values():
+        # Sort by model name, then by task (train before analyze)
+        def sort_key(job):
+            task_order = {"train": 0, "analyze": 1}
+            return (job.model, task_order.get(job.task, 99))
+
+        for job in sorted(self.jobs.values(), key=sort_key):
             style = status_styles.get(job.status, "")
 
             epoch_str = f"{job.epoch}/{job.total_epochs}" if job.total_epochs else "-"
             elbo_str = f"{job.elbo:.1f}" if job.elbo else "-"
-            remaining_str = job.remaining_time if job.remaining_time else "-"
+            # Combine elapsed/remaining into single column
+            elapsed = job.elapsed_str()
+            remaining = job.remaining_time if job.remaining_time else "-"
+            time_str = f"{elapsed}/{remaining}"
             status_str = f"[{style}]{job.status}[/{style}]" if style else job.status
 
             table.add_row(
-                job.name,
+                job.model,
+                job.task,
                 job.device,
                 status_str,
                 epoch_str,
                 elbo_str,
-                remaining_str,
-                job.elapsed_str(),
+                time_str,
             )
 
         return table
@@ -130,19 +143,35 @@ class StatusManager:
         self.console.print(self._make_table())
 
         self.console.print("\n[bold]Log Files:[/bold]")
+        # Get unique log files per model (not per task)
+        seen_models = set()
         for job in self.jobs.values():
-            if job.log_file:
-                self.console.print(f"  {job.name}: {job.log_file}")
+            if job.log_file and job.model not in seen_models:
+                self.console.print(f"  {job.model}: {job.log_file}")
+                seen_models.add(job.model)
 
-        # Summary stats
-        completed = sum(1 for j in self.jobs.values() if j.status == "completed")
-        failed = sum(1 for j in self.jobs.values() if j.status == "failed")
-        total = len(self.jobs)
+        # Summary stats - count unique models
+        models = set(j.model for j in self.jobs.values())
+        completed_models = sum(
+            1 for m in models
+            if all(
+                self.jobs.get(f"{m}_train", self.jobs.get(f"{m}_analyze")) and
+                self.jobs.get(f"{m}_train", type('obj', (), {'status': 'pending'})()).status == "completed" and
+                self.jobs.get(f"{m}_analyze", type('obj', (), {'status': 'pending'})()).status == "completed"
+                for t in ["train", "analyze"]
+                if f"{m}_{t}" in self.jobs
+            )
+        )
+        total_models = len(models)
 
-        if failed == 0:
-            self.console.print(f"\n[green]All {total} models completed successfully.[/green]")
+        # Simpler count: train tasks completed = models completed
+        train_completed = sum(1 for j in self.jobs.values() if j.task == "train" and j.status == "completed")
+        train_failed = sum(1 for j in self.jobs.values() if j.task == "train" and j.status == "failed")
+
+        if train_failed == 0:
+            self.console.print(f"\n[green]All {train_completed} models completed successfully.[/green]")
         else:
-            self.console.print(f"\n[yellow]{completed}/{total} models completed, {failed} failed.[/yellow]")
+            self.console.print(f"\n[yellow]{train_completed}/{total_models} models completed, {train_failed} failed.[/yellow]")
 
     def __enter__(self) -> "StatusManager":
         self.start_live()
@@ -150,6 +179,23 @@ class StatusManager:
 
     def __exit__(self, *args) -> None:
         self.stop_live()
+
+
+def _is_progress_line(line: str) -> bool:
+    """Check if a line is a tqdm-style progress bar update.
+
+    Progress lines typically look like:
+    - "5000/10000 [01:23<02:45, 60.12it/s, ELBO=-5.475e+05]"
+    - "transform_W:  38%|███▊      | 385/1000 [00:03<00:05, 109.52it/s, NLL=8353034.500000]"
+    - " 10%|█         | 100/1000 [00:01<00:09, 100.00it/s]"
+    """
+    # Match tqdm patterns: N/M with bracket or pipe progress, or XX%|
+    if re.search(r"\d+/\d+\s*[\[\|]", line):
+        return True
+    # Match percentage-based progress (with optional prefix like "transform_W:")
+    if re.search(r"\d+%\|", line):
+        return True
+    return False
 
 
 def stream_output(
@@ -161,7 +207,8 @@ def stream_output(
     """
     Thread target: reads subprocess stdout with non-blocking I/O.
 
-    - Writes to log file
+    - Writes non-progress lines to log file immediately
+    - Buffers progress lines and writes only final state
     - Parses epoch/elbo from output
     - Updates StatusManager
     - Signals completion when stdout ends
@@ -176,6 +223,7 @@ def stream_output(
 
     with open(log_file, "w") as log_fh:
         buffer = b""
+        current_progress_line = ""  # Track current progress bar state
 
         while True:
             # Check if process has ended
@@ -206,31 +254,48 @@ def stream_output(
                 if "\r" in decoded:
                     decoded = decoded.split("\r")[-1]
 
-                log_fh.write(decoded + "\n")
-                log_fh.flush()
-
                 # Skip empty lines
                 if not decoded or decoded.isspace():
                     continue
 
-                # Parse iteration/ELBO from output
+                # Check if this is a progress line
+                if _is_progress_line(decoded):
+                    # Update current progress state (don't write yet)
+                    current_progress_line = decoded
+                else:
+                    # Non-progress line: write any buffered progress first, then this line
+                    if current_progress_line:
+                        log_fh.write(current_progress_line + "\n")
+                        log_fh.flush()
+                        current_progress_line = ""
+                    log_fh.write(decoded + "\n")
+                    log_fh.flush()
+
+                # Parse iteration/ELBO from output (for status updates)
                 _parse_and_update(decoded, job_name, manager)
 
             # Check incomplete buffer for tqdm progress (ends with \r, no \n)
             if buffer and b"\r" in buffer:
                 decoded = buffer.decode(errors="replace")
                 latest = decoded.split("\r")[-1]
+                if _is_progress_line(latest):
+                    current_progress_line = latest
                 _parse_and_update(latest, job_name, manager)
 
             # Small sleep to avoid busy-waiting
             time.sleep(0.1)
+
+        # Write any final progress line
+        if current_progress_line:
+            log_fh.write(current_progress_line + "\n")
+            log_fh.flush()
 
         # Process any remaining buffer
         if buffer:
             decoded = buffer.decode(errors="replace").rstrip()
             if "\r" in decoded:
                 decoded = decoded.split("\r")[-1]
-            if decoded and not decoded.isspace():
+            if decoded and not decoded.isspace() and not _is_progress_line(decoded):
                 log_fh.write(decoded + "\n")
                 log_fh.flush()
 

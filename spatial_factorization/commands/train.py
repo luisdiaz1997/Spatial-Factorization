@@ -43,6 +43,7 @@ def _save_model(model, config: Config, model_dir: Path) -> None:
         state["hyperparameters"]["spatial"] = True
         state["hyperparameters"]["prior"] = config.prior
         state["hyperparameters"]["multigroup"] = config.groups
+        state["hyperparameters"]["local"] = config.local
 
     torch.save(state, model_dir / "model.pth")
 
@@ -54,7 +55,70 @@ def _save_elbo_history(elbo_history: list, model_dir: Path) -> None:
     np.save(model_dir / "elbo_history.npy", np.array(elbo_history))
 
 
-def _get_training_metadata(model, config: Config, data, train_time: float) -> dict:
+def _append_elbo_history(new_elbo_history: list, model_dir: Path) -> None:
+    """Append new ELBO values to existing elbo_history.csv/npy."""
+    csv_path = model_dir / "elbo_history.csv"
+    if csv_path.exists():
+        existing_df = pd.read_csv(csv_path)
+        start_iter = int(existing_df["iteration"].max()) + 1
+    else:
+        existing_df = pd.DataFrame({"iteration": [], "elbo": []})
+        start_iter = 0
+
+    new_df = pd.DataFrame({
+        "iteration": range(start_iter, start_iter + len(new_elbo_history)),
+        "elbo": new_elbo_history,
+    })
+    combined = pd.concat([existing_df, new_df], ignore_index=True)
+    combined.to_csv(csv_path, index=False)
+    np.save(model_dir / "elbo_history.npy", combined["elbo"].values)
+
+
+def _create_warm_start_pnmf(loaded_model, config: Config, pnmf_kwargs: dict):
+    """Create a PNMF subclass that warm-starts training from a loaded model state.
+
+    Overrides _create_spatial_prior and _initialize_W (and _initialize_mu_nonspatial
+    for non-spatial models) to inject the loaded parameters instead of fresh random
+    initialization, then lets fit() run the training loop normally.
+    """
+    loaded_W = loaded_model._model.W.data.clone().cpu()
+
+    if config.spatial:
+        loaded_prior = loaded_model._prior
+
+        class _WarmStartPNMF(PNMF):
+            def _create_spatial_prior(self, Y, coordinates, groups):
+                return loaded_prior
+
+            def _initialize_W(self, X_torch):
+                device = self._get_device()
+                self._model.W.data = loaded_W.to(device)
+                n = X_torch.shape[1]
+                dummy = np.zeros((n, self.n_components))
+                return dummy, dummy
+
+        return _WarmStartPNMF(**pnmf_kwargs)
+
+    else:
+        loaded_prior_sd = {k: v.clone().cpu() for k, v in loaded_model._prior.state_dict().items()}
+
+        class _WarmStartPNMF(PNMF):
+            def _initialize_W(self, X_torch):
+                device = self._get_device()
+                self._model.W.data = loaded_W.to(device)
+                n = X_torch.shape[1]
+                dummy = np.zeros((n, self.n_components))
+                return dummy, dummy
+
+            def _initialize_mu_nonspatial(self, exp_F_init):
+                device = self._get_device()
+                sd = {k: v.to(device) for k, v in loaded_prior_sd.items()}
+                self._prior.load_state_dict(sd)
+
+        return _WarmStartPNMF(**pnmf_kwargs)
+
+
+def _get_training_metadata(model, config: Config, data, train_time: float, prev_n_iterations: int = 0) -> dict:
     """Build training metadata dict."""
     return {
         "n_components": model.n_components_,
@@ -62,7 +126,7 @@ def _get_training_metadata(model, config: Config, data, train_time: float) -> di
         "training_time": train_time,
         "max_iter": config.training.get("max_iter", 10000),
         "converged": model.n_iter_ < config.training.get("max_iter", 10000),
-        "n_iterations": model.n_iter_,
+        "n_iterations": prev_n_iterations + model.n_iter_,
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "model_config": config.model,
         "training_config": config.training,
@@ -74,7 +138,7 @@ def _get_training_metadata(model, config: Config, data, train_time: float) -> di
     }
 
 
-def run(config_path: str):
+def run(config_path: str, resume: bool = False):
     """Train a PNMF model from config.
 
     Output files (outputs/{dataset}/{model}/):
@@ -100,15 +164,46 @@ def run(config_path: str):
     n_components = config.model.get("n_components", 10)
     mode = config.model.get("mode", "expanded")
     device = config.training.get("device", "cpu")
-    print(f"Training PNMF with {n_components} components (mode={mode}, device={device})...")
 
-    model = PNMF(random_state=config.seed, **config.to_pnmf_kwargs())
+    # Determine model output directory early (needed for resume)
+    model_dir = output_dir / config.model_name
+
+    # Resume: load existing model and warm-start from its parameters
+    prev_n_iterations = 0
+    if resume:
+        pth_path = model_dir / "model.pth"
+        if not pth_path.exists():
+            raise FileNotFoundError(
+                f"No saved model found at {pth_path}. "
+                "Cannot resume. Run without --resume to train from scratch."
+            )
+        print(f"Resuming training from: {model_dir}/")
+        from .analyze import _load_model
+        loaded_model = _load_model(model_dir)
+
+        # Track previous iteration count for cumulative metadata
+        training_json = model_dir / "training.json"
+        if training_json.exists():
+            with open(training_json) as f:
+                prev_meta = json.load(f)
+            prev_n_iterations = prev_meta.get("n_iterations", 0)
+        print(f"  Previous iterations: {prev_n_iterations}")
+
+        model = _create_warm_start_pnmf(loaded_model, config, config.to_pnmf_kwargs())
+        print(f"Continuing PNMF with {n_components} components (mode={mode}, device={device})...")
+    else:
+        model = PNMF(random_state=config.seed, **config.to_pnmf_kwargs())
+        print(f"Training PNMF with {n_components} components (mode={mode}, device={device})...")
 
     # Train (spatial models require coordinates; groups are optional)
     t0 = time.perf_counter()
     if config.spatial:
-        print(f"  spatial=True, prior={config.prior}, groups={config.groups}")
-        print(f"  Inducing points (M): {config.model.get('num_inducing', 3000)}")
+        print(f"  spatial=True, prior={config.prior}, groups={config.groups}, local={config.local}")
+        if config.local:
+            K = config.model.get('K', 50)
+            print(f"  LCGP: K={K}")
+        else:
+            print(f"  Inducing points (M): {config.model.get('num_inducing', 3000)}")
         print(f"  Kernel: {config.model.get('kernel', 'Matern32')} (lengthscale={config.model.get('lengthscale', 1.0)})")
 
         fit_kwargs = dict(
@@ -123,21 +218,30 @@ def run(config_path: str):
         elbo_history, model = model.fit(data.Y.numpy(), return_history=True)
     train_time = time.perf_counter() - t0
 
+    if resume:
+        # _WarmStartPNMF is a local class that can't be pickled. Training is
+        # complete so the overrides are no longer needed; restore the base class
+        # so _save_model can pickle the model identically to a normal train run.
+        model.__class__ = PNMF
+
     max_iter = config.training.get("max_iter", 10000)
     print("\nTraining complete!")
     print(f"  Final ELBO:     {model.elbo_:.2f}")
     print(f"  Training time:  {train_time:.1f}s")
     print(f"  Converged:      {model.n_iter_ < max_iter}")
 
-    # Create model-specific output directory
-    model_dir = output_dir / config.model_name
-    model_dir.mkdir(parents=True, exist_ok=True)
-
     # Save outputs
+    model_dir.mkdir(parents=True, exist_ok=True)
     _save_model(model, config, model_dir)
-    _save_elbo_history(elbo_history, model_dir)
 
-    metadata = _get_training_metadata(model, config, data, train_time)
+    if resume:
+        _append_elbo_history(elbo_history, model_dir)
+    else:
+        _save_elbo_history(elbo_history, model_dir)
+
+    metadata = _get_training_metadata(model, config, data, train_time, prev_n_iterations)
+    if resume:
+        metadata["resumed"] = True
     with open(model_dir / "training.json", "w") as f:
         json.dump(metadata, f, indent=2)
 

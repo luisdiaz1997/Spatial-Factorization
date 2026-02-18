@@ -4,163 +4,141 @@ Config-driven spatial transcriptomics analysis using probabilistic non-negative 
 
 ## Overview
 
-This repository provides scripts and notebooks for analyzing spatial transcriptomics datasets using:
+Four-stage CLI pipeline for analyzing spatial transcriptomics datasets:
 
+```
+preprocess → train → analyze → figures
+```
+
+Built on:
 - **[PNMF](https://github.com/luisdiaz1997/Probabilistic-NMF)**: Probabilistic Non-negative Matrix Factorization with sklearn-compatible API
-- **[GPzoo](https://github.com/luisdiaz1997/GPzoo)**: Scalable Gaussian Process backends (SVGP, VNNGP, LCGP)
-
-### Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                   Spatial-Factorization                     │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐ │
-│  │   Configs   │  │  Datasets   │  │  Training Scripts   │ │
-│  │   (YAML)    │  │  (loaders)  │  │    & Notebooks      │ │
-│  └─────────────┘  └─────────────┘  └─────────────────────┘ │
-└─────────────────────────────────────────────────────────────┘
-                           │
-           ┌───────────────┴───────────────┐
-           ▼                               ▼
-┌─────────────────────┐         ┌─────────────────────┐
-│        PNMF         │         │       GPzoo         │
-│  - sklearn API      │         │  - SVGP, VNNGP      │
-│  - ELBO modes       │         │  - LCGP, MGGP       │
-│  - Non-spatial      │         │  - Kernels          │
-└─────────────────────┘         └─────────────────────┘
-```
+- **[GPzoo](https://github.com/luisdiaz1997/GPzoo)**: Scalable Gaussian Process backends (SVGP, LCGP, MGGP variants)
 
 ## Installation
 
 ```bash
-# Clone the repository
 git clone https://github.com/luisdiaz1997/Spatial-Factorization.git
 cd Spatial-Factorization
 
-# Install in development mode
-pip install -e ".[all]"
-
-# Install backends (from GitHub for now)
-pip install git+https://github.com/luisdiaz1997/GPzoo.git
-pip install git+https://github.com/luisdiaz1997/Probabilistic-NMF.git
+# Install dependencies
+pip install -e ../Probabilistic-NMF
+pip install -e ../GPzoo
+pip install -e .
 ```
 
-## Quick Start
+## Usage
 
-### Using Config Files
+### Single model
 
 ```bash
-# Train a model using a config file
-spatial-train --config configs/slideseq/lcgp.yaml
+# Run all stages for one model
+spatial_factorization run all -c configs/slideseq/svgp.yaml
 
-# Override specific parameters
-spatial-train --config configs/slideseq/lcgp.yaml --steps 5000 --device cuda:1
+# Run specific stages
+spatial_factorization run train analyze figures -c configs/slideseq/svgp.yaml
+
+# Run stages individually
+spatial_factorization preprocess -c configs/slideseq/svgp.yaml
+spatial_factorization train      -c configs/slideseq/svgp.yaml
+spatial_factorization analyze    -c configs/slideseq/svgp.yaml
+spatial_factorization figures    -c configs/slideseq/svgp.yaml
+
+# Resume training from a checkpoint
+spatial_factorization train --resume -c configs/slideseq/svgp.yaml
 ```
 
-### Programmatic API
+### Multiple models in parallel
 
-```python
-from spatial_factorization import Config, load_dataset, build_model, train
+```bash
+# Generate per-model configs from a general config
+spatial_factorization generate -c configs/slideseq/general.yaml
 
-# Load config
-config = Config.from_yaml("configs/slideseq/lcgp.yaml")
+# Run all 5 models in parallel (pnmf, svgp, mggp_svgp, lcgp, mggp_lcgp)
+spatial_factorization run all -c configs/slideseq/general.yaml
 
-# Load data
-data = load_dataset(config.dataset)
+# Dry run to see the execution plan
+spatial_factorization run all -c configs/slideseq/general.yaml --dry-run
 
-# Build and train model
-model = build_model(config.model, data)
-losses = train(model, data, config.training)
+# Force re-preprocessing
+spatial_factorization run all -c configs/slideseq/general.yaml --force
+
+# Run all datasets at once
+spatial_factorization run all -c configs/
+```
+
+## Models
+
+| Model | Config key | Groups | Description |
+|-------|-----------|--------|-------------|
+| PNMF | `spatial: false` | — | Non-spatial baseline |
+| SVGP | `spatial: true, local: false, groups: false` | No | Sparse variational GP (M<<N inducing pts) |
+| MGGP-SVGP | `spatial: true, local: false, groups: true` | Yes | Multi-group SVGP |
+| LCGP | `spatial: true, local: true, groups: false` | No | Locally conditioned GP (M=N, VNNGP-style) |
+| MGGP-LCGP | `spatial: true, local: true, groups: true` | Yes | Multi-group LCGP |
+
+## Config Reference
+
+```yaml
+seed: 42
+output_dir: outputs/slideseq
+
+dataset:
+  name: slideseq
+  path: data/slideseq/Puck_200115_08.h5ad
+
+model:
+  n_components: 10
+  spatial: true
+  local: true           # true = LCGP, false = SVGP
+  groups: false         # true = multi-group variant
+  K: 50                 # KNN neighbors (LCGP only)
+  num_inducing: 3000    # inducing points (SVGP only)
+  kernel: Matern32
+  lengthscale: 8.0
+  train_lengthscale: false
+  mode: expanded
+  loadings_mode: projected
+
+training:
+  max_iter: 20000
+  batch_size: 7000
+  y_batch_size: null
+  learning_rate: 0.01
+  device: cuda
 ```
 
 ## Project Structure
 
 ```
 Spatial-Factorization/
-├── configs/                    # YAML experiment configs
-│   ├── slideseq/
-│   │   ├── svgp.yaml
-│   │   ├── lcgp.yaml
-│   │   └── vnngp.yaml
-│   └── tenxvisium/
-│       └── ...
-├── src/
-│   └── spatial_factorization/
-│       ├── config.py           # Config loading/validation
-│       ├── datasets/           # Dataset loaders
-│       │   ├── slideseq.py
-│       │   └── tenxvisium.py
-│       ├── models/             # Model factory
-│       └── training/           # Training utilities
-├── notebooks/                  # Analysis notebooks
-├── scripts/                    # CLI entry points
-└── outputs/                    # Checkpoints and logs (git-ignored)
-```
-
-## Supported Datasets
-
-| Dataset | Description | Loader |
-|---------|-------------|--------|
-| SlideseqV2 | Spatial transcriptomics (beads) | `squidpy.datasets.slideseqv2()` |
-| 10x Visium | Spatial transcriptomics (spots) | `squidpy.datasets.visium_*()` |
-
-## Supported Models
-
-| Model | Description | Use Case |
-|-------|-------------|----------|
-| `svgp_nsf` | SVGP + Poisson factorization | Standard spatial NMF |
-| `vnngp_nsf` | VNNGP + Poisson factorization | Large datasets, local structure |
-| `lcgp_nsf` | LCGP + Poisson factorization | Low-rank approximation |
-| `*_mggp_nsf` | Multi-group variants | Datasets with known cell types |
-
-## Config Reference
-
-```yaml
-name: experiment_name
-seed: 42
-
-dataset:
-  name: slideseq              # Dataset name
-  spatial_scale: 50.0         # Coordinate scaling
-  filter_mt: true             # Filter mitochondrial genes
-
-model:
-  type: lcgp_nsf              # Model type
-  n_components: 10            # Latent factors
-  lengthscale: 4.0            # Kernel lengthscale
-  K: 50                       # Nearest neighbors (VNNGP/LCGP)
-  loadings_mode: projected    # W constraint mode
-
-training:
-  steps: 10000
-  optimizer: adam
-  learning_rates:
-    default: 0.01
-    loading: 0.001
-
-output:
-  dir: outputs/slideseq/lcgp
+├── configs/slideseq/
+│   ├── general.yaml        # Superset config for multiplex training
+│   ├── general_test.yaml   # Quick test (200 epochs)
+│   ├── pnmf.yaml
+│   ├── svgp.yaml
+│   ├── mggp_svgp.yaml
+│   ├── lcgp.yaml
+│   └── mggp_lcgp.yaml
+├── spatial_factorization/
+│   ├── cli.py              # Click CLI entry point
+│   ├── config.py           # Config dataclass
+│   ├── runner.py           # Parallel job runner
+│   ├── commands/
+│   │   ├── preprocess.py
+│   │   ├── train.py
+│   │   ├── analyze.py
+│   │   └── figures.py
+│   └── datasets/
+│       ├── slideseq.py
+│       └── tenxvisium.py
+└── outputs/                # Generated (git-ignored)
 ```
 
 ## Related Projects
 
 - **[PNMF](https://github.com/luisdiaz1997/Probabilistic-NMF)**: Core probabilistic NMF library
 - **[GPzoo](https://github.com/luisdiaz1997/GPzoo)**: Gaussian process backends
-- **[NSF](https://github.com/willtownes/nsf-paper)**: Original non-negative spatial factorization paper
 
 ## License
 
 GPL-2.0
-
-## Citation
-
-If you use this software, please cite:
-
-```bibtex
-@software{spatial_factorization,
-  author = {Chumpitaz Diaz, Luis},
-  title = {Spatial Factorization},
-  url = {https://github.com/luisdiaz1997/Spatial-Factorization},
-  year = {2025}
-}
-```

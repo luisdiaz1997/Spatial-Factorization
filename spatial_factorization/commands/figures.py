@@ -80,6 +80,28 @@ def _load_analysis_results(model_dir: Path) -> dict:
         with open(enrichment_path) as f:
             results["gene_enrichment"] = json.load(f)
 
+    # Load Lu data (SVGP: Lu.pt, LCGP: Lu.npy)
+    lu_pt_path = model_dir / "Lu.pt"
+    lu_npy_path = model_dir / "Lu.npy"
+
+    if lu_pt_path.exists():
+        import torch
+        results["Lu"] = torch.load(lu_pt_path, map_location="cpu", weights_only=False)
+        results["is_lcgp"] = False
+    elif lu_npy_path.exists():
+        results["Lu"] = np.load(lu_npy_path)  # (L, M, K)
+        results["is_lcgp"] = True
+
+    # Load Z (inducing point locations)
+    z_path = model_dir / "Z.npy"
+    if z_path.exists():
+        results["Z"] = np.load(z_path)  # (M, 2)
+
+    # Load groupsZ (inducing point group assignments)
+    groupsz_path = model_dir / "groupsZ.npy"
+    if groupsz_path.exists():
+        results["groupsZ"] = np.load(groupsz_path)  # (M,)
+
     return results
 
 
@@ -212,9 +234,9 @@ def plot_scales_spatial(
         squeeze=False
     )
 
-    # Fixed color scale for uncertainty
+    # Color scale: 0 to 98th percentile for better contrast
     vmin = 0.0
-    vmax = 1.0
+    vmax = np.percentile(scales, 98)
 
     for i in range(L):
         row, col = divmod(i, ncols)
@@ -663,11 +685,13 @@ def plot_lu_scales_at_inducing(
     Returns:
         matplotlib Figure
     """
-    import torch as _torch
-
     # diag(Lu @ Lu^T) = sum of squares along last dim of each row
-    # Lu is (L, M, M), result is (L, M)
-    lu_scales = _torch.sum(Lu ** 2, dim=-1).sqrt().detach().cpu().numpy()  # (L, M)
+    # Lu is (L, M, M) for SVGP or (L, M, K) for LCGP, result is (L, M)
+    if isinstance(Lu, np.ndarray):
+        lu_scales = np.sqrt(np.sum(Lu ** 2, axis=-1))  # (L, M)
+    else:
+        import torch as _torch
+        lu_scales = _torch.sum(Lu ** 2, dim=-1).sqrt().detach().cpu().numpy()  # (L, M)
     Z_np = Z.detach().cpu().numpy() if hasattr(Z, 'detach') else np.asarray(Z)
 
     L, M = lu_scales.shape
@@ -684,7 +708,7 @@ def plot_lu_scales_at_inducing(
     )
 
     vmin = 0.0
-    vmax = 1.0
+    vmax = np.percentile(lu_scales, 98)
 
     for i in range(L):
         row, col = divmod(i, ncols)
@@ -970,15 +994,13 @@ def run(config_path: str):
         print(f"  Saved: {figures_dir}/scales_spatial.png")
 
     # 1c. Lu inducing-point uncertainty (spatial models only)
-    lu_path = model_dir / "Lu.pt"
-    z_path = model_dir / "Z.npy"
-    if spatial and lu_path.exists() and z_path.exists():
-        import torch
+    is_lcgp = results.get("is_lcgp", False)
+    Lu_data = results.get("Lu")
+    Z_data = results.get("Z")
+    if spatial and Z_data is not None and Lu_data is not None:
         print("Generating Lu inducing-point uncertainty plot...")
-        Lu_constrained = torch.load(lu_path, map_location="cpu", weights_only=False)
-        Z = np.load(z_path)
         fig = plot_lu_scales_at_inducing(
-            Lu_constrained, Z,
+            Lu_data, Z_data,
             moran_idx=moran_idx,
             moran_values=moran_values,
         )
@@ -989,14 +1011,14 @@ def run(config_path: str):
     # 1d. Cell-type spatial plot (data groups + inducing points side-by-side)
     if data.groups is not None:
         groups_np = data.groups.numpy()
-        # Load inducing-point data if available
-        groupsz_path = model_dir / "groupsZ.npy"
+        # Load inducing-point data if available (skip for LCGP since M=N)
+        groupsZ_data = results.get("groupsZ")
         Z_celltype = None
         groupsZ_celltype = None
-        if spatial and z_path.exists():
-            Z_celltype = np.load(z_path)
-            if groupsz_path.exists():
-                groupsZ_celltype = np.load(groupsz_path)
+        if spatial and Z_data is not None and not is_lcgp:
+            # Only show inducing points for SVGP (LCGP uses all data points)
+            Z_celltype = Z_data
+            groupsZ_celltype = groupsZ_data
         fig = plot_groups(
             coords, groups_np, group_names,
             Z=Z_celltype, groupsZ=groupsZ_celltype,

@@ -81,6 +81,11 @@ class Config:
         return self.model.get("groups", False)
 
     @property
+    def local(self) -> bool:
+        """Return whether LCGP (local conditioning) mode is enabled."""
+        return self.model.get("local", False)
+
+    @property
     def model_name(self) -> str:
         """Return model directory name based on spatial/groups config.
 
@@ -112,14 +117,25 @@ class Config:
             # Note: prior is NOT passed to PNMF - it auto-selects based on spatial/multigroup/local
             kwargs["kernel"] = self.model.get("kernel", "Matern32")
             kwargs["multigroup"] = self.model.get("groups", False)
-            kwargs["num_inducing"] = self.model.get("num_inducing", 3000)
             kwargs["lengthscale"] = float(self.model.get("lengthscale", 1.0))
             kwargs["sigma"] = float(self.model.get("sigma", 1.0))
             kwargs["group_diff_param"] = float(self.model.get("group_diff_param", 10.0))
             kwargs["train_lengthscale"] = self.model.get("train_lengthscale", False)
-            kwargs["cholesky_mode"] = self.model.get("cholesky_mode", "exp")
-            kwargs["diagonal_only"] = self.model.get("diagonal_only", False)
-            kwargs["inducing_allocation"] = self.model.get("inducing_allocation", "proportional")
+
+            # LCGP vs SVGP params
+            is_local = self.model.get("local", False)
+            kwargs["local"] = is_local
+
+            if is_local:
+                # LCGP-specific params
+                kwargs["K"] = self.model.get("K", 50)
+                kwargs["precompute_knn"] = self.model.get("precompute_knn", True)
+            else:
+                # SVGP-specific params (not used by LCGP)
+                kwargs["num_inducing"] = self.model.get("num_inducing", 3000)
+                kwargs["cholesky_mode"] = self.model.get("cholesky_mode", "exp")
+                kwargs["diagonal_only"] = self.model.get("diagonal_only", False)
+                kwargs["inducing_allocation"] = self.model.get("inducing_allocation", "proportional")
 
         # Training params
         kwargs["max_iter"] = self.training.get("max_iter", 10000)

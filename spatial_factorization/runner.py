@@ -13,10 +13,11 @@ import subprocess
 import sys
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .config import Config
 from .status import JobStatus, StatusManager, stream_output
@@ -25,7 +26,7 @@ from .status import JobStatus, StatusManager, stream_output
 # Resource limits
 CPU_SLOTS_PER_PROCESS = 16  # cores per training process
 MAX_CPU_SLOTS = 64  # total cores available
-GPU_MEMORY_BUDGET_GB = 11  # GB reserved per job in our virtual tracking
+# GPU scheduling: 1 job per GPU (exclusive access)
 
 
 @dataclass
@@ -79,42 +80,6 @@ def query_gpus() -> List[GPUInfo]:
     return gpus
 
 
-def assign_gpu(gpus: List[GPUInfo], gpu_slots_used: Dict[int, int] = None) -> Optional[int]:
-    """Assign a GPU using virtual free memory from our slot tracking.
-
-    Uses total GPU memory minus reserved slots to make assignment decisions,
-    NOT real-time free memory. This is necessary because training jobs don't
-    consume GPU memory immediately during initialization (K-means, KNN, etc.),
-    but must be considered "reserved" as soon as assigned.
-
-    Args:
-        gpus: List of available GPUInfo objects.
-        gpu_slots_used: Dict mapping gpu_id -> number of running jobs on that GPU.
-
-    Returns:
-        GPU device ID with most virtual free memory (≥ budget).
-        None if no GPU has sufficient virtual capacity.
-    """
-    if not gpus:
-        return None
-
-    gpu_slots_used = gpu_slots_used or {}
-
-    best_gpu = None
-    best_virtual_free = 0
-
-    for gpu in gpus:
-        slots = gpu_slots_used.get(gpu.device_id, 0)
-        virtual_free_gb = gpu.total_memory_gb - (slots * GPU_MEMORY_BUDGET_GB)
-
-        if virtual_free_gb >= GPU_MEMORY_BUDGET_GB:
-            if virtual_free_gb > best_virtual_free:
-                best_virtual_free = virtual_free_gb
-                best_gpu = gpu.device_id
-
-    return best_gpu
-
-
 @dataclass
 class Job:
     """A training job for a single model."""
@@ -122,9 +87,11 @@ class Job:
     name: str
     config_path: Path
     stages: List[str] = field(default_factory=lambda: ["train", "analyze", "figures"])
-    status: str = "pending"  # pending, running, completed, failed
+    status: str = "pending"  # pending, training, analyzing, completed, failed
     device: str = "cpu"
-    gpu_id: Optional[int] = None
+    gpu_id: Optional[int] = None  # GPU used for training
+    analyze_gpu_id: Optional[int] = None  # GPU used for analyze (may differ)
+    analyze_uses_cpu: bool = False  # Whether analyze is using CPU
     pid: Optional[int] = None
     start_time: float = 0.0
     elapsed: float = 0.0
@@ -158,13 +125,10 @@ class RunStatus:
 class JobRunner:
     """Parallel job runner with resource-aware scheduling.
 
-    Phases:
-    1. Detect config type (general.yaml vs per-model)
-    2. Preprocess once (if needed)
-    3. Create jobs from per-model configs
-    4. Parallel training with CPU/GPU management
-    5. Streaming post-train (analyze → figures per model)
-    6. Report results
+    Scheduling:
+    - Training: Uses available GPUs + 1 CPU fallback
+    - Analyze: Same as training - parallel with GPU + CPU fallback
+    - At least one job runs on CPU when all GPUs are busy
     """
 
     def __init__(
@@ -186,6 +150,7 @@ class JobRunner:
         self.jobs: List[Job] = []
         self.run_status = RunStatus()
         self.status_manager = StatusManager()
+        self.is_multiplex = False
 
     def run(self) -> None:
         """Execute the multiplex pipeline."""
@@ -218,9 +183,11 @@ class JobRunner:
                 "status": "pending",
             }
 
-            # Add to status manager
+            # Add train task to status manager
             self.status_manager.add_job(JobStatus(
-                name=config.model_name,
+                name=f"{config.model_name}_train",
+                model=config.model_name,
+                task="train",
                 config_path=path,
                 device="pending",
                 status="pending",
@@ -228,29 +195,36 @@ class JobRunner:
                 total_epochs=config.training.get("max_iter", 0),
             ))
 
+            # Add analyze task to status manager
+            self.status_manager.add_job(JobStatus(
+                name=f"{config.model_name}_analyze",
+                model=config.model_name,
+                task="analyze",
+                config_path=path,
+                device="pending",
+                status="pending",
+                log_file=log_file,
+                total_epochs=0,  # analyze doesn't have epochs in the same way
+            ))
+
+        self.is_multiplex = len(self.jobs) > 1
+
         self._print_job_summary()
 
         if self.dry_run:
             print("\n[Dry run] Would execute the above jobs. Exiting.")
             return
 
-        # Phase 4: Parallel training
-        print("\nPhase 4: Parallel training...")
-        self._run_parallel_training()
+        # Phase 4: Parallel training + sequential analyze
+        print("\nPhase 4: Parallel training + analyze (GPU + CPU fallback)...")
+        self._run_parallel()
 
-        # Phase 5: Streaming post-train (done within training loop)
-
-        # Phase 6: Report
+        # Phase 5: Report
         self._print_final_report()
         self._save_status()
 
     def _resolve_configs(self) -> List[Path]:
-        """Resolve config paths to a list of per-model configs.
-
-        Returns:
-            List of paths to per-model config files.
-        """
-        # If directory, find all general.yaml files
+        """Resolve config paths to a list of per-model configs."""
         if self.config_path.is_dir():
             general_configs = list(self.config_path.rglob("general.yaml"))
             if not general_configs:
@@ -258,7 +232,6 @@ class JobRunner:
 
             print(f"Found {len(general_configs)} general config(s)")
 
-            # Generate per-model configs for each general.yaml
             config_paths = []
             for general_path in general_configs:
                 from .generate import generate_configs
@@ -269,7 +242,6 @@ class JobRunner:
 
             return config_paths
 
-        # If general.yaml, generate per-model configs
         if Config.is_general_config(self.config_path):
             from .generate import generate_configs
 
@@ -277,14 +249,13 @@ class JobRunner:
             generated = generate_configs(self.config_path)
             return list(generated.values())
 
-        # Single per-model config
         print(f"Per-model config: {self.config_path}")
         return [self.config_path]
 
     def _ensure_preprocessed(self, config_path: Path) -> None:
         """Ensure preprocessed data exists, run if needed."""
         config = Config.from_yaml(config_path)
-        output_dir = Path(config.output_dir)  # Already includes dataset in path
+        output_dir = Path(config.output_dir)
 
         if Config.preprocessed_exists(output_dir) and not self.force_preprocess:
             print(f"  Preprocessed data exists: {output_dir}/preprocessed/")
@@ -303,192 +274,268 @@ class JobRunner:
         for job in self.jobs:
             print(f"{job.name:<15} {job.status:<10}")
 
-    def _run_parallel_training(self) -> None:
-        """Run training jobs in parallel with resource management."""
-        # Calculate max concurrent jobs based on CPU
-        max_concurrent = min(MAX_CPU_SLOTS // CPU_SLOTS_PER_PROCESS, len(self.jobs))
+    def _run_parallel(self) -> None:
+        """Run training and analyze in parallel with GPU/CPU scheduling.
 
-        # Query GPUs
+        Scheduling:
+        - Training: Uses available GPUs + 1 CPU fallback
+        - Analyze: Same pattern - parallel with GPU + CPU fallback
+        - At least one job runs on CPU when all GPUs are busy
+        """
         gpus = query_gpus()
         if gpus:
             print(f"Available GPUs:")
             for gpu in gpus:
-                print(f"  GPU {gpu.device_id}: {gpu.name} ({gpu.free_memory_gb:.1f}GB free / {gpu.total_memory_gb:.1f}GB total)")
+                print(f"  GPU {gpu.device_id}: {gpu.name} ({gpu.free_memory_gb:.1f}GB free)")
         else:
             print("No GPUs available, all jobs will run on CPU")
 
-        # Track running jobs
-        running: Dict[int, Tuple[subprocess.Popen, Job]] = {}
-        cpu_slots_used = 0
-        gpu_slots_used: Dict[int, int] = {}  # gpu_id -> count
+        # Training state
+        training_running: Dict[int, Tuple[subprocess.Popen, Job]] = {}
+        training_done: Set[str] = set()  # Jobs that finished training (success or fail)
+        train_gpu_slots: Set[int] = set()  # GPU IDs in use by training
+        train_cpu_slot = False  # CPU slot in use by training?
 
-        # Track completed jobs
-        completed = 0
-        failed_to_start = 0
+        # Analyze state
+        analyze_pending: Set[str] = set()  # Jobs waiting for training to finish before analyze
+        analyze_running: Dict[int, Tuple[subprocess.Popen, Job]] = {}  # pid -> (proc, job)
+        analyze_gpu_slots: Set[int] = set()  # GPU IDs in use by analyze
+        analyze_cpu_slot = False  # CPU slot in use by analyze?
+        analyze_done: Set[str] = set()
+
         total = len(self.jobs)
 
-        # Signal handler for graceful shutdown
         def signal_handler(sig, frame):
             self.status_manager.stop_live()
-            print("\n\nInterrupted! Terminating subprocesses...")
-            for proc, job in running.values():
+            print("\n\nInterrupted! Terminating...")
+            for proc, _ in training_running.values():
+                proc.terminate()
+            for proc, _ in analyze_running.values():
                 proc.terminate()
             self._save_status()
             sys.exit(1)
 
         signal.signal(signal.SIGINT, signal_handler)
 
-        # Start live status display
-        with self.status_manager:
-            # Main event loop
-            while completed < total:
-                # Start new jobs if slots available
-                pending_jobs = [j for j in self.jobs if j.status == "pending"]
-                for job in pending_jobs:
-                    if len(running) >= max_concurrent:
-                        break
+        def get_used_gpus() -> Set[int]:
+            """Get all GPU IDs currently in use by training or analyze."""
+            return train_gpu_slots | analyze_gpu_slots
 
-                    # Determine device
+        def get_cpu_in_use() -> bool:
+            """Check if CPU slot is in use by either training or analyze."""
+            return train_cpu_slot or analyze_cpu_slot
+
+        with self.status_manager:
+            while len(analyze_done) < total:
+                # === Start training jobs ===
+                for job in self.jobs:
+                    if job.status != "pending":
+                        continue
+
+                    # Check if we can start this job
                     config = Config.from_yaml(job.config_path)
                     use_gpu = config.training.get("device", "cpu") == "gpu" and gpus
 
                     gpu_id = None
                     if use_gpu:
-                        gpu_id = assign_gpu(gpus, gpu_slots_used)
-                        if gpu_id is not None:
+                        # Find free GPU (not used by training OR analyze)
+                        used_gpus = get_used_gpus()
+                        free = [g.device_id for g in gpus if g.device_id not in used_gpus]
+                        if free:
+                            gpu_id = free[0]
                             job.device = f"cuda:{gpu_id}"
                             job.gpu_id = gpu_id
-                            gpu_slots_used[gpu_id] = gpu_slots_used.get(gpu_id, 0) + 1
-                        else:
+                            train_gpu_slots.add(gpu_id)
+                            print(f"  [{job.name}] Training on GPU {gpu_id}")
+                        elif not get_cpu_in_use():
+                            # CPU fallback when all GPUs busy
                             job.device = "cpu"
+                            train_cpu_slot = True
+                            print(f"  [{job.name}] Training on CPU (GPUs busy)")
+                        else:
+                            continue
                     else:
-                        job.device = "cpu"
+                        if not get_cpu_in_use():
+                            job.device = "cpu"
+                            train_cpu_slot = True
+                            print(f"  [{job.name}] Training on CPU")
+                        else:
+                            continue
 
-                    # Update status manager with device
-                    self.status_manager.update_job(job.name, device=job.device)
-
-                    # Launch job
+                    # Launch training
+                    self.status_manager.update_job(f"{job.name}_train", device=job.device)
                     env = self._get_launch_env(job.gpu_id)
-                    proc, thread = self._launch_training(job, env)
+                    proc = self._launch_process(["train"], job, env, task="train")
 
                     if proc:
-                        job.status = "running"
+                        job.status = "training"
                         job.start_time = time.time()
                         job.pid = proc.pid
-                        job.thread = thread
-                        running[job.pid] = (proc, job)
-                        cpu_slots_used += CPU_SLOTS_PER_PROCESS
-
-                        # Update status manager
-                        self.status_manager.update_job(
-                            job.name,
-                            status="running",
-                            start_time=time.time(),
-                        )
+                        training_running[job.pid] = (proc, job)
+                        analyze_pending.add(job.name)  # Queue for analyze after training
+                        self.status_manager.update_job(f"{job.name}_train", status="training", start_time=time.time())
                     else:
-                        # Failed to start
                         job.status = "failed"
-                        job.error = "Failed to launch subprocess"
-                        failed_to_start += 1
-                        completed += 1  # Count as completed so loop progresses
+                        job.error = "Failed to launch training"
+                        training_done.add(job.name)
+                        analyze_done.add(job.name)
                         self.run_status.jobs[job.name]["status"] = "failed"
                         self.run_status.jobs[job.name]["error"] = job.error
-                        self.status_manager.update_job(
-                            job.name,
-                            status="failed",
-                            end_time=time.time(),
-                        )
+                        self.status_manager.update_job(f"{job.name}_train", status="failed")
+                        self.status_manager.update_job(f"{job.name}_analyze", status="skipped")
 
-                # Check if we can make progress
-                if not running:
-                    still_pending = [j for j in self.jobs if j.status == "pending"]
-                    if still_pending and len(running) < max_concurrent:
-                        pass  # Will be shown in status table
-                    elif completed >= total:
-                        break
-                    elif failed_to_start == total:
-                        break
+                # === Check completed training ===
+                finished = [pid for pid, (proc, _) in training_running.items() if proc.poll() is not None]
 
-                # Check running jobs
-                finished_pids = []
-                for pid, (proc, job) in running.items():
-                    if proc.poll() is not None:
-                        finished_pids.append(pid)
+                for pid in finished:
+                    proc, job = training_running.pop(pid)
 
-                # Process completed jobs
-                for pid in finished_pids:
-                    proc, job = running.pop(pid)
-                    cpu_slots_used -= CPU_SLOTS_PER_PROCESS
-
-                    # Free GPU slot
+                    # Free device
                     if job.gpu_id is not None:
-                        gpu_slots_used[job.gpu_id] -= 1
-                        if gpu_slots_used[job.gpu_id] == 0:
-                            del gpu_slots_used[job.gpu_id]
+                        train_gpu_slots.discard(job.gpu_id)
+                        print(f"  [{job.name}] Training done, GPU {job.gpu_id} freed")
+                    else:
+                        train_cpu_slot = False
+                        print(f"  [{job.name}] Training done, CPU freed")
 
-                    elapsed = time.time() - job.start_time
-                    job.elapsed = elapsed
+                    job.elapsed = time.time() - job.start_time
+                    training_done.add(job.name)
+
+                    if proc.returncode != 0:
+                        job.status = "failed"
+                        job.error = f"Training exit code: {proc.returncode}"
+                        analyze_pending.discard(job.name)
+                        analyze_done.add(job.name)
+                        self.run_status.jobs[job.name]["status"] = "failed"
+                        self.run_status.jobs[job.name]["error"] = job.error
+                        self.status_manager.update_job(f"{job.name}_train", status="failed")
+                        self.status_manager.update_job(f"{job.name}_analyze", status="skipped")
+                    else:
+                        # Training completed successfully
+                        self.status_manager.update_job(f"{job.name}_train", status="completed", end_time=time.time())
+
+                # === Start analyze jobs (parallel with GPU/CPU scheduling) ===
+                # Priority: training jobs get first dibs on GPUs
+                # Only start analyze if no pending training jobs are waiting
+                pending_train_jobs = [j for j in self.jobs if j.status == "pending"]
+                has_free_gpu = any(g.device_id not in get_used_gpus() for g in gpus)
+                has_free_cpu = not get_cpu_in_use()
+
+                # If there are pending training jobs and resources available, skip analyze
+                if pending_train_jobs and (has_free_gpu or has_free_cpu):
+                    pass  # Let training jobs get resources first
+                else:
+                    for job in self.jobs:
+                        # Skip if not ready for analyze
+                        if job.name not in analyze_pending:
+                            continue
+                        if job.name not in training_done:
+                            continue
+                        if job.name in analyze_done:
+                            continue
+                        if job.name in {j.name for _, j in analyze_running.values()}:
+                            continue
+
+                        # Skip failed jobs
+                        if job.status == "failed":
+                            analyze_pending.discard(job.name)
+                            analyze_done.add(job.name)
+                            continue
+
+                        # Determine device for analyze
+                        config = Config.from_yaml(job.config_path)
+                        use_gpu = config.training.get("device", "cpu") == "gpu" and gpus
+
+                        analyze_gpu_id = None
+                        analyze_uses_cpu = False
+                        if use_gpu:
+                            # Find free GPU (not used by training OR analyze)
+                            used_gpus = get_used_gpus()
+                            free = [g.device_id for g in gpus if g.device_id not in used_gpus]
+                            if free:
+                                analyze_gpu_id = free[0]
+                                analyze_device = f"cuda:{analyze_gpu_id}"
+                                analyze_gpu_slots.add(analyze_gpu_id)
+                                print(f"  [{job.name}] Analyzing on GPU {analyze_gpu_id}")
+                            elif not get_cpu_in_use():
+                                # CPU fallback when all GPUs busy
+                                analyze_device = "cpu"
+                                analyze_uses_cpu = True
+                                analyze_cpu_slot = True
+                                print(f"  [{job.name}] Analyzing on CPU (GPUs busy)")
+                            else:
+                                continue  # No resources available
+                        else:
+                            if not get_cpu_in_use():
+                                analyze_device = "cpu"
+                                analyze_uses_cpu = True
+                                analyze_cpu_slot = True
+                                print(f"  [{job.name}] Analyzing on CPU")
+                            else:
+                                continue
+
+                        # Store analyze device info on job
+                        job.analyze_gpu_id = analyze_gpu_id
+                        job.analyze_uses_cpu = analyze_uses_cpu
+
+                        # Remove from pending
+                        analyze_pending.discard(job.name)
+
+                        # Update status
+                        self.status_manager.update_job(f"{job.name}_analyze", status="analyzing", device=analyze_device)
+
+                        # Launch analyze+figures
+                        env = self._get_launch_env(analyze_gpu_id)
+                        proc = self._launch_process(["analyze", "figures"], job, env, task="analyze")
+
+                        if proc:
+                            analyze_running[proc.pid] = (proc, job)
+                        else:
+                            job.status = "failed"
+                            job.error = "Failed to launch analyze"
+                            analyze_done.add(job.name)
+                            self.run_status.jobs[job.name]["status"] = "failed"
+                            self.run_status.jobs[job.name]["error"] = job.error
+                            self.status_manager.update_job(f"{job.name}_analyze", status="failed")
+                            # Free CPU slot if we took it
+                            if analyze_uses_cpu:
+                                analyze_cpu_slot = False
+
+                # === Check completed analyze ===
+                finished_analyze = [pid for pid, (proc, _) in analyze_running.items() if proc.poll() is not None]
+
+                for pid in finished_analyze:
+                    proc, job = analyze_running.pop(pid)
+
+                    # Free device used by analyze
+                    if job.analyze_gpu_id is not None:
+                        analyze_gpu_slots.discard(job.analyze_gpu_id)
+                        print(f"  [{job.name}] Analyze done, GPU {job.analyze_gpu_id} freed")
+                    elif getattr(job, 'analyze_uses_cpu', False):
+                        analyze_cpu_slot = False
+                        print(f"  [{job.name}] Analyze done, CPU freed")
 
                     if proc.returncode == 0:
                         job.status = "completed"
-                        completed += 1
                         self.run_status.jobs[job.name]["status"] = "completed"
-                        self.run_status.jobs[job.name]["elapsed"] = elapsed
-                        self.status_manager.update_job(
-                            job.name,
-                            status="completed",
-                            end_time=time.time(),
-                        )
-
-                        # Run post-train stages (outside live display context would be cleaner,
-                        # but we do it here to show progress)
-                        self._run_post_train(job)
+                        self.run_status.jobs[job.name]["elapsed"] = job.elapsed
+                        self.status_manager.update_job(f"{job.name}_analyze", status="completed", end_time=time.time())
+                        print(f"  [{job.name}] Complete!")
                     else:
                         job.status = "failed"
-                        job.error = f"Exit code: {proc.returncode}"
-                        completed += 1
+                        job.error = f"Analyze exit code: {proc.returncode}"
                         self.run_status.jobs[job.name]["status"] = "failed"
                         self.run_status.jobs[job.name]["error"] = job.error
-                        self.status_manager.update_job(
-                            job.name,
-                            status="failed",
-                            end_time=time.time(),
-                        )
+                        self.status_manager.update_job(f"{job.name}_analyze", status="failed")
 
-                # Refresh display
+                    analyze_done.add(job.name)
+
                 self.status_manager.refresh()
-
-                # Sleep before next poll
                 time.sleep(0.5)
 
-    def _run_post_train(self, job: Job) -> None:
-        """Run post-training stages (analyze, figures) for a job."""
-        for stage in ["analyze", "figures"]:
-            try:
-                self._run_stage(stage, job.config_path)
-            except Exception as e:
-                job.error = f"{stage}: {e}"
-                break
-
-    def _launch_training(self, job: Job, env: Dict[str, str]) -> Optional[Tuple[subprocess.Popen, threading.Thread]]:
-        """Launch a training job as a subprocess with output streaming.
-
-        Args:
-            job: The job to launch.
-            env: Environment variables with CUDA device set.
-
-        Returns:
-            Tuple of (subprocess.Popen, threading.Thread), or (None, None) if launch failed.
-        """
-        cmd = [
-            sys.executable,
-            "-m",
-            "spatial_factorization",
-            "run",
-            "train",
-            "-c",
-            str(job.config_path),
-        ]
+    def _launch_process(self, stages: List[str], job: Job, env: Dict[str, str], task: str = "train") -> Optional[subprocess.Popen]:
+        """Launch a subprocess for given stages."""
+        cmd = [sys.executable, "-m", "spatial_factorization", "run"] + stages + ["-c", str(job.config_path)]
 
         try:
             proc = subprocess.Popen(
@@ -498,40 +545,30 @@ class JobRunner:
                 env={**os.environ, **env},
             )
 
-            # Start thread to stream output
+            # Stream output - use task-specific job name for status updates
+            status_job_name = f"{job.name}_{task}"
             thread = threading.Thread(
                 target=stream_output,
-                args=(proc, job.name, self.status_manager, job.log_file),
+                args=(proc, status_job_name, self.status_manager, job.log_file),
                 daemon=True,
             )
             thread.start()
-
-            return proc, thread
+            return proc
         except Exception as e:
             print(f"  [{job.name}] Failed to launch: {e}")
-            return None, None
+            return None
 
     def _get_launch_env(self, gpu_id: Optional[int]) -> Dict[str, str]:
-        """Get environment variables for launching a subprocess.
-
-        Args:
-            gpu_id: GPU device ID, or None for CPU.
-
-        Returns:
-            Dictionary of environment variables.
-        """
+        """Get environment variables for launching a subprocess."""
         env = {"PYTHONUNBUFFERED": "1"}
         if gpu_id is not None:
             env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+        else:
+            env["CUDA_VISIBLE_DEVICES"] = ""
         return env
 
-    def _run_stage(self, stage: str, config_path: Path) -> None:
-        """Run a single pipeline stage as a subprocess.
-
-        Args:
-            stage: Stage name (preprocess, train, analyze, figures).
-            config_path: Path to config file.
-        """
+    def _run_stage(self, stage: str, config_path: Path, log_file: Optional[Path] = None, force_cpu: bool = False) -> subprocess.CompletedProcess:
+        """Run a single pipeline stage as a subprocess."""
         cmd = [
             sys.executable,
             "-m",
@@ -541,14 +578,28 @@ class JobRunner:
             str(config_path),
         ]
 
-        result = subprocess.run(cmd, check=True)
+        env = dict(os.environ)
+        if force_cpu:
+            env["CUDA_VISIBLE_DEVICES"] = ""
+
+        result = subprocess.run(cmd, capture_output=True, text=True, env=env)
+
+        if log_file:
+            with open(log_file, "a") as f:
+                f.write(f"\n{'='*60}\n  Stage: {stage}\n{'='*60}\n\n")
+                if result.stdout:
+                    f.write(result.stdout)
+                if result.returncode != 0:
+                    f.write(f"\n[FAILED] Exit code: {result.returncode}\n")
+
+        if result.returncode != 0:
+            raise subprocess.CalledProcessError(result.returncode, cmd, result.stdout, result.stderr)
+
         return result
 
     def _print_final_report(self) -> None:
         """Print final run report."""
         self.run_status.end_time = datetime.now()
-
-        # Use status manager's summary
         self.status_manager.print_summary()
 
         total_elapsed = (self.run_status.end_time - self.run_status.start_time).total_seconds()
@@ -556,12 +607,11 @@ class JobRunner:
 
     def _save_status(self) -> None:
         """Save run status to JSON file."""
-        # Use output dir from first job
         if not self.jobs:
             return
 
         config = Config.from_yaml(self.jobs[0].config_path)
-        output_dir = Path(config.output_dir)  # Already includes dataset in path
+        output_dir = Path(config.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
         status_path = output_dir / "run_status.json"
