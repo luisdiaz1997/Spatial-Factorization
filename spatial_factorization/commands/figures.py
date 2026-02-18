@@ -234,9 +234,9 @@ def plot_scales_spatial(
         squeeze=False
     )
 
-    # Fixed color scale for uncertainty
+    # Color scale: 0 to 98th percentile for better contrast
     vmin = 0.0
-    vmax = 1.0
+    vmax = np.percentile(scales, 98)
 
     for i in range(L):
         row, col = divmod(i, ncols)
@@ -685,11 +685,13 @@ def plot_lu_scales_at_inducing(
     Returns:
         matplotlib Figure
     """
-    import torch as _torch
-
     # diag(Lu @ Lu^T) = sum of squares along last dim of each row
-    # Lu is (L, M, M), result is (L, M)
-    lu_scales = _torch.sum(Lu ** 2, dim=-1).sqrt().detach().cpu().numpy()  # (L, M)
+    # Lu is (L, M, M) for SVGP or (L, M, K) for LCGP, result is (L, M)
+    if isinstance(Lu, np.ndarray):
+        lu_scales = np.sqrt(np.sum(Lu ** 2, axis=-1))  # (L, M)
+    else:
+        import torch as _torch
+        lu_scales = _torch.sum(Lu ** 2, dim=-1).sqrt().detach().cpu().numpy()  # (L, M)
     Z_np = Z.detach().cpu().numpy() if hasattr(Z, 'detach') else np.asarray(Z)
 
     L, M = lu_scales.shape
@@ -706,7 +708,7 @@ def plot_lu_scales_at_inducing(
     )
 
     vmin = 0.0
-    vmax = 1.0
+    vmax = np.percentile(lu_scales, 98)
 
     for i in range(L):
         row, col = divmod(i, ncols)
@@ -995,22 +997,16 @@ def run(config_path: str):
     is_lcgp = results.get("is_lcgp", False)
     Lu_data = results.get("Lu")
     Z_data = results.get("Z")
-    if spatial and Z_data is not None:
-        if is_lcgp:
-            # LCGP: Skip since M=N (all data points are inducing)
-            # The scales_spatial.png already shows uncertainty at all data points
-            print("  Skipping Lu inducing plot for LCGP (M=N, see scales_spatial.png instead)")
-        elif Lu_data is not None:
-            # SVGP: Full Cholesky factor
-            print("Generating Lu inducing-point uncertainty plot...")
-            fig = plot_lu_scales_at_inducing(
-                Lu_data, Z_data,
-                moran_idx=moran_idx,
-                moran_values=moran_values,
-            )
-            fig.savefig(figures_dir / "lu_scales_inducing.png", dpi=150, bbox_inches="tight")
-            plt.close(fig)
-            print(f"  Saved: {figures_dir}/lu_scales_inducing.png")
+    if spatial and Z_data is not None and Lu_data is not None:
+        print("Generating Lu inducing-point uncertainty plot...")
+        fig = plot_lu_scales_at_inducing(
+            Lu_data, Z_data,
+            moran_idx=moran_idx,
+            moran_values=moran_values,
+        )
+        fig.savefig(figures_dir / "lu_scales_inducing.png", dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"  Saved: {figures_dir}/lu_scales_inducing.png")
 
     # 1d. Cell-type spatial plot (data groups + inducing points side-by-side)
     if data.groups is not None:

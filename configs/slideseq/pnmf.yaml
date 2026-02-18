@@ -10,11 +10,11 @@ preprocessing:
   min_cells: 10
 
 model:
-  n_components: 10
-  mode: expanded
-  loadings_mode: multiplicative
   training_mode: standard
+  mode: expanded
   E: 3
+  loadings_mode: multiplicative
+  n_components: 10
   spatial: false
   prior: GaussianPrior
 

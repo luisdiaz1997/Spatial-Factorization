@@ -10,20 +10,20 @@ preprocessing:
   min_cells: 10
 
 model:
-  n_components: 10
-  mode: expanded
-  loadings_mode: multiplicative
   training_mode: standard
+  mode: expanded
   E: 3
+  loadings_mode: multiplicative
+  n_components: 10
   spatial: true
   prior: LCGP
-  train_lengthscale: false
   lengthscale: 8.0
   kernel: Matern32
+  train_lengthscale: false
   sigma: 1.0
   local: true
-  K: 50
   precompute_knn: true
+  K: 50
   groups: true
   group_diff_param: 1.0
   inducing_allocation: derived
