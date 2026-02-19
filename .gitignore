@@ -211,3 +211,10 @@ outputs/
 
 # Data files
 data/
+
+# Generated per-model configs (regenerate with `spatial_factorization generate`)
+# Only general.yaml and general_test.yaml are kept in version control.
+configs/**/*.yaml
+!configs/**/general.yaml
+!configs/**/general_test.yaml
+configs/run_status.json
