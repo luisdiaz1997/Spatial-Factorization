@@ -1,0 +1,30 @@
+name: liver_pnmf
+seed: 67
+dataset: liver
+output_dir: outputs/liver_test/diseased
+
+preprocessing:
+  spatial_scale: 50.0
+  path: /gladstone/engelhardt/lab/lchumpitaz/datasets/liver/adata_healthy_diseased_merfish.h5ad
+  cell_type_column: Cell_Type_final
+  min_group_fraction: 0.01
+
+model:
+  loadings_mode: multiplicative
+  n_components: 12
+  mode: expanded
+  training_mode: standard
+  E: 3
+  spatial: false
+  prior: GaussianPrior
+
+training:
+  max_iter: 10
+  learning_rate: 2e-3
+  optimizer: Adam
+  tol: 1e-4
+  verbose: false
+  device: gpu
+  batch_size: 13000
+  y_batch_size: 317
+  shuffle: true

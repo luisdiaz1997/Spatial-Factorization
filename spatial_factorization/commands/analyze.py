@@ -109,7 +109,15 @@ def _load_model(model_dir: Path):
             from gpzoo.gp import LCGP, MGGP_LCGP
             from gpzoo.kernels import batched_Matern32, batched_MGGP_Matern32
 
-            K = hyperparams.get("K", 50)
+            K = hyperparams.get("K")
+            if K is None:
+                import warnings
+                warnings.warn(
+                    "Checkpoint is missing 'K' in hyperparameters (saved before K was persisted). "
+                    "Defaulting to K=50. If state_dict loading fails, retrain to update checkpoint.",
+                    UserWarning,
+                )
+                K = 50
 
             if is_multigroup:
                 groupsZ = prior_sd["groupsZ"]      # (M,)
@@ -265,23 +273,57 @@ def _print_model_summary(model):
             print(f"  Groups:             {n_groups}")
 
 
-def _compute_reconstruction_error(model, Y: np.ndarray, coordinates=None, groups=None) -> float:
+def _get_factors_batched(model, coords: np.ndarray, groups, batch_size: int = 10000):
+    """Get factors and scales from a spatial model in batches to avoid OOM.
+
+    For SVGP, each batch avoids materialising the full (L, N, M) kernel matrix.
+    For LCGP, each batch avoids the full (L, N, K, K) Su_knn tensor.
+
+    KNN for LCGP is computed against the full stored gp.Z (all training points),
+    so batching X is semantically correct — only the memory footprint shrinks.
+
+    Returns:
+        factors: (N, L) exp-space factor means
+        scales:  (N, L) factor standard deviations
+    """
+    from PNMF.transforms import _get_spatial_qF
+
+    N = coords.shape[0]
+    all_means: list = []
+    all_scales: list = []
+
+    for start in range(0, N, batch_size):
+        end = min(start + batch_size, N)
+        coords_b = coords[start:end]
+        groups_b = groups[start:end] if groups is not None else None
+        qF = _get_spatial_qF(model, coordinates=coords_b, groups=groups_b)
+        all_means.append(torch.exp(qF.mean.detach().cpu()).T)   # (chunk, L)
+        all_scales.append(qF.scale.detach().cpu().T)             # (chunk, L)
+
+    factors = torch.cat(all_means, dim=0).numpy()   # (N, L)
+    scales  = torch.cat(all_scales, dim=0).numpy()  # (N, L)
+    return factors, scales
+
+
+def _compute_reconstruction_error(model, Y: np.ndarray, F: np.ndarray = None,
+                                   coordinates=None, groups=None) -> float:
     """Compute relative Frobenius norm reconstruction error.
 
     Args:
         model: Fitted PNMF model
         Y: Original data (N, D)
-        coordinates: Spatial coordinates (for spatial models)
-        groups: Group labels (for spatial models)
+        F: Pre-computed (N, L) exp-space factors. If None, computed from model.
+        coordinates: Spatial coordinates (used only when F is None)
+        groups: Group labels (used only when F is None)
 
     Returns:
         Relative error: ||Y - Y_hat||_F / ||Y||_F
     """
-    # Get factors and loadings
-    if coordinates is not None:
-        F = get_factors(model, use_mgf=False, coordinates=coordinates, groups=groups)
-    else:
-        F = get_factors(model, use_mgf=False)  # (N, L) - exp(μ)
+    if F is None:
+        if coordinates is not None:
+            F = get_factors(model, use_mgf=False, coordinates=coordinates, groups=groups)
+        else:
+            F = get_factors(model, use_mgf=False)  # (N, L) - exp(μ)
     # components_ is (L, D), so we need (N, L) @ (L, D) = (N, D)
     Y_reconstructed = F @ model.components_  # (N, L) @ (L, D) = (N, D)
 
@@ -290,7 +332,8 @@ def _compute_reconstruction_error(model, Y: np.ndarray, coordinates=None, groups
     return float(error)
 
 
-def _compute_poisson_deviance(model, Y: np.ndarray, coordinates=None, groups=None) -> dict:
+def _compute_poisson_deviance(model, Y: np.ndarray, F: np.ndarray = None,
+                               coordinates=None, groups=None) -> dict:
     """Compute Poisson deviance (KL divergence) for goodness-of-fit.
 
     D(V_true || V_reconstruct) = sum_ij (V_ij * log(V_ij / mu_ij) - V_ij + mu_ij)
@@ -300,8 +343,9 @@ def _compute_poisson_deviance(model, Y: np.ndarray, coordinates=None, groups=Non
     Args:
         model: Fitted PNMF model
         Y: Original data (N, D)
-        coordinates: Spatial coordinates (for spatial models)
-        groups: Group labels (for spatial models)
+        F: Pre-computed (N, L) exp-space factors. If None, computed from model.
+        coordinates: Spatial coordinates (used only when F is None)
+        groups: Group labels (used only when F is None)
 
     Returns:
         Dictionary with deviance metrics:
@@ -310,10 +354,13 @@ def _compute_poisson_deviance(model, Y: np.ndarray, coordinates=None, groups=Non
         - mean_per_gene: Mean deviance per gene (averaged over spots)
     """
     # Get reconstruction
-    if coordinates is not None:
-        factors = get_factors(model, use_mgf=False, coordinates=coordinates, groups=groups)
+    if F is None:
+        if coordinates is not None:
+            factors = get_factors(model, use_mgf=False, coordinates=coordinates, groups=groups)
+        else:
+            factors = get_factors(model, use_mgf=False)  # (N, L) - exp(μ)
     else:
-        factors = get_factors(model, use_mgf=False)  # (N, L) - exp(μ)
+        factors = F
     mu = factors @ model.components_  # (N, L) @ (L, D) = (N, D)
 
     # Ensure mu > 0 for numerical stability
@@ -345,7 +392,8 @@ def _compute_poisson_deviance(model, Y: np.ndarray, coordinates=None, groups=Non
 
 
 def _compute_group_loadings(
-    model, Y: np.ndarray, groups: np.ndarray, coordinates=None, gp_groups=None,
+    model, Y: np.ndarray, groups: np.ndarray, F: np.ndarray = None,
+    coordinates=None, gp_groups=None,
     max_iter: int = 1000, verbose: bool = False,
 ) -> dict:
     """Compute group-specific loadings using PNMF's transform_W.
@@ -359,7 +407,8 @@ def _compute_group_loadings(
         model: Fitted PNMF model
         Y: Count matrix (N, D)
         groups: Group labels (N,) for subsetting data by cell-type
-        coordinates: Spatial coordinates (for spatial models)
+        F: Pre-computed (N, L) exp-space factors. If None, computed from model.
+        coordinates: Spatial coordinates (used only when F is None)
         gp_groups: Group labels for GP conditioning (only for multigroup models).
             Pass None for non-multigroup spatial models (SVGP without groups).
         max_iter: Maximum iterations for transform_W optimization
@@ -371,10 +420,11 @@ def _compute_group_loadings(
         - reconstruction_error: dict mapping group_id -> relative error
     """
     # Get exp-space latent factors (N, L)
-    if coordinates is not None:
-        F = get_factors(model, use_mgf=False, coordinates=coordinates, groups=gp_groups)
-    else:
-        F = get_factors(model, use_mgf=False)  # (N, L) - exp(μ)
+    if F is None:
+        if coordinates is not None:
+            F = get_factors(model, use_mgf=False, coordinates=coordinates, groups=gp_groups)
+        else:
+            F = get_factors(model, use_mgf=False)  # (N, L) - exp(μ)
     L = F.shape[1]
 
     # Get global loadings for fallback
@@ -572,14 +622,12 @@ def run(config_path: str):
     coords = data.X.numpy()
     groups = data.groups.numpy() if (data.groups is not None and use_groups) else None
 
+    # analyze_batch_size: chunk N to avoid OOM on large datasets (SVGP/LCGP)
+    analyze_batch_size = config.training.get("analyze_batch_size", 10000)
+
     if spatial:
-        # For spatial models, call GP forward pass ONCE to get both factors and scales
-        from PNMF.transforms import _get_spatial_qF
-        qF = _get_spatial_qF(model, coordinates=coords, groups=groups)
-        # Extract mean (factors) and scale (uncertainty) from qF distribution
-        # qF.mean and qF.scale are shape (L, N), transpose to (N, L)
-        factors = torch.exp(qF.mean.detach().cpu()).T.numpy()  # exp-space factors
-        scales = qF.scale.detach().cpu().T.numpy()  # standard deviation
+        # Batched GP forward pass — avoids OOM for large N
+        factors, scales = _get_factors_batched(model, coords, groups, analyze_batch_size)
     else:
         factors = get_factors(model, use_mgf=False)  # (N, L) - exp(μ)
         scales = factor_uncertainty(model, return_variance=False)  # (N, L)
@@ -590,20 +638,14 @@ def run(config_path: str):
     moran_idx, moran_values = _compute_moran_i(factors, coords)
     print(f"  Top 3 Moran's I: {moran_values[:3]}")
 
-    # Compute reconstruction error
+    # Compute reconstruction error (use pre-computed factors to avoid second GP pass)
     print("Computing reconstruction error...")
-    if spatial:
-        recon_error = _compute_reconstruction_error(model, data.Y.numpy(), coordinates=coords, groups=groups)
-    else:
-        recon_error = _compute_reconstruction_error(model, data.Y.numpy())
+    recon_error = _compute_reconstruction_error(model, data.Y.numpy(), F=factors)
     print(f"  Reconstruction error: {recon_error:.4f}")
 
-    # Compute Poisson deviance
+    # Compute Poisson deviance (use pre-computed factors to avoid third GP pass)
     print("Computing Poisson deviance...")
-    if spatial:
-        poisson_dev = _compute_poisson_deviance(model, data.Y.numpy(), coordinates=coords, groups=groups)
-    else:
-        poisson_dev = _compute_poisson_deviance(model, data.Y.numpy())
+    poisson_dev = _compute_poisson_deviance(model, data.Y.numpy(), F=factors)
     print(f"  Poisson deviance (mean): {poisson_dev['mean']:.4f}")
 
     # Compute group-specific loadings whenever data has groups
@@ -611,17 +653,11 @@ def run(config_path: str):
     group_loadings_result = None
     if data.groups is not None and data.n_groups > 1:
         print(f"\nComputing group-specific loadings for {data.n_groups} groups...")
-        # gp_groups: only pass to GP forward pass for multigroup models
-        gp_groups = data.groups.numpy() if use_groups else None
-        if spatial:
-            group_loadings_result = _compute_group_loadings(
-                model, data.Y.numpy(), data.groups.numpy(),
-                coordinates=coords, gp_groups=gp_groups, verbose=True,
-            )
-        else:
-            group_loadings_result = _compute_group_loadings(
-                model, data.Y.numpy(), data.groups.numpy(), verbose=True,
-            )
+        # Pass pre-computed factors to avoid a fourth GP forward pass
+        group_loadings_result = _compute_group_loadings(
+            model, data.Y.numpy(), data.groups.numpy(),
+            F=factors, verbose=True,
+        )
         print(f"  Group reconstruction errors:")
         for g, err in group_loadings_result["reconstruction_error"].items():
             group_name = data.group_names[g] if data.group_names else f"Group {g}"

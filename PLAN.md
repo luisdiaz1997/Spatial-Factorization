@@ -1,415 +1,168 @@
-# Datasets Integration Plan
+# Bug Fixes: Multi-Dataset Run Failures
 
-## Goal
-
-Integrate all datasets that GPzoo supports into the Spatial-Factorization pipeline.
-Each dataset needs: a loader in `spatial_factorization/datasets/`, configs in `configs/`,
-and a verified preprocess → train → analyze → figures run.
+Findings from the first `run all -c configs/ --config-name general_test.yaml` run
+across all datasets. Five distinct bugs were identified.
 
 ---
 
-## Dataset Inventory
+## Bug 1 — Analyze OOM: SVGP forward pass on full N
 
-### 1. SlideseqV2 — DONE
+**Affected:** `merfish_svgp`, `colon_svgp`, `liver_svgp` (diseased)
+**Stage:** analyze
 
-**Status:** Fully implemented and working.
+**Root cause:** `analyze.py` calls `model.get_factors(Y, coordinates)` which runs the
+SVGP forward on all N points at once. This materializes an `(L, N, M)` or `(M, N)`
+tensor (and the full K(Z,X) kernel matrix) that exceeds GPU memory for large N:
 
-**GPzoo ref:** `../GPzoo/gpzoo/datasets/slideseq/common.py:27` — `load_slideseq_with_groups()`
-**Notebook:** `../GPzoo/notebooks/Slideseqv2_MGGP_April_2025.ipynb`
+| Dataset | N | Error |
+|---------|---|-------|
+| merfish | 73 K | tried to allocate 9.88 GiB — `gp.py:376` `(W @ Lu) ** 2` |
+| colon | 120 K | tried to allocate 16.08 GiB — same line |
+| liver (diseased) | 310 K | tried to allocate 3.46 GiB — `kernels.py:53` vmap K(Z,X) |
 
-| Key | Value |
-|-----|-------|
-| Source | `sq.datasets.slideseqv2()` |
-| N × D | ~41,786 × 4,000 (after QC) |
-| Coords | `adata.obsm["spatial"]` |
-| Groups | `adata.obs["cluster"]` (Leiden) |
-| Expression | `adata.raw.to_adata().X` → then filter MT genes |
-| Loader | `spatial_factorization/datasets/slideseq.py` |
-| Configs | `configs/slideseq/` (all 5 models + test variants) |
-
----
-
-### 2. MERFISH squidpy (3D) — NOT IMPLEMENTED
-
-**Status:** No loader. Squidpy dataset, 3D spatial coordinates.
-
-**Notebook:** `../GPzoo/notebooks/merfish_squidpy.ipynb` — uses `sq.datasets.merfish()`
-
-| Key | Value |
-|-----|-------|
-| Source | `sq.datasets.merfish()` |
-| N × D | 73,655 × 161 |
-| Coords 2D | `adata.obsm["spatial"]` (Centroid_X, Centroid_Y) |
-| Coords 3D | `adata.obsm["spatial3d"]` (Centroid_X, Centroid_Y, Bregma) |
-| Groups | `adata.obs["Cell_class"]` (16 cell classes) |
-| Expression | `adata.X` (sparse, no `.raw`) |
-| Notes | Bregma = Z axis (coronal slice position, 12 slices); notebook rescales Z: `X[:, 2] = X[:, 2]/50.0; X = X*50.0` |
-
-**Notebook hyperparams:**
-- `L=12`, `K=50`, `lengthscale=10.0`, `spatial_scale=50`
-- `x_batch_size=15000`, `y_batch_size=D=161`
-
-**Loader task:** Support both 2D (use `obsm["spatial"]`) and 3D (use `obsm["spatial3d"]`). The pipeline currently only handles 2D. For now, implement 2D only (one slice or full collapsed).
+**Fix:** Chunk the `get_factors` / `_get_spatial_qF` call in `analyze.py` over N
+with a configurable `analyze_batch_size` (e.g., default 10 000). Concatenate
+factors and scales across chunks. The `y_batch_size` and model training batching
+are irrelevant here — this is inference-time memory.
 
 ---
 
-### 3. Liver Healthy MERFISH — NOT IMPLEMENTED
+## Bug 2 — Analyze OOM: LCGP forward pass on full N
 
-**Status:** No loader.
+**Affected:** `merfish_lcgp`, `colon_lcgp`
+**Stage:** analyze
 
-**Notebook:** `../GPzoo/notebooks/liver_mggp_healthy.ipynb` (and variants: `_matern32.ipynb`, `_matern32_umap_init.ipynb`, `_exploratory.ipynb`)
-**SDMBench benchmark:** `../SDMBench/Benchmarks/liver.ipynb` — uses this data for benchmarking
+**Root cause:** LCGP `reshape_parameters` materializes `[L, N, K, K]` for `Su_knn`
+before the Cholesky decomposition:
 
-| Key | Value |
-|-----|-------|
-| Path | `/gladstone/engelhardt/lab/lchumpitaz/datasets/liver/adata_healthy_merfish.h5ad` |
-| N × D | 90,408 × 317 |
-| Coords | `adata.obsm["X_spatial"]` (NOT `"spatial"`) |
-| Groups | `adata.obs["Cell_Type"]` (9 cell types: Cholangiocyte, LSEC, HSC 1/2, Hepatocyte 1/2/3, Mac 1/2) |
-| Expression | `adata.raw.X` (raw counts) |
-| obsm keys | `X_pca`, `X_pca_harmony`, `X_spatial`, `X_umap` |
+| Dataset | N | K | Shape | Error |
+|---------|---|---|-------|-------|
+| merfish | 73 K | 50 | [10, 73655, 50, 50] | 8.23 GiB — `gp.py:825` cholesky |
+| colon | 120 K | 50 | [10, 119906, 50, 50] | 13.40 GiB — `gp.py:821` Lu_knn @ Lu_knn.T |
 
-**GPzoo ref:** `../GPzoo/gpzoo/datasets/liver/common.py:26` — `load_liver_with_groups()`
-**GPzoo hyperparams (config.py):** `L=12`, `K=50`, `spatial_scale=50`, `lengthscale=10`, `x_batch_size=13000`, `y_batch_size=317`
+**Fix:** Same batching solution as Bug 1 — chunk N in the analyze forward pass.
+Both SVGP and LCGP paths use `get_factors`, so a single batching loop covers both.
 
 ---
 
-### 4. Liver Diseased MERFISH — NOT IMPLEMENTED
+## Bug 3 — Train crash: MGGP_SVGP inducing allocation mismatch
 
-**Status:** No loader (can reuse the `LiverLoader` with a different path).
+**Affected:** `colon_mggp_svgp`
+**Stage:** train
 
-**Notebook:** `../GPzoo/notebooks/liver_mggp_desease.ipynb` (and `_init.ipynb`, `_exploratory.ipynb`)
+**Root cause:** Colon has many small groups. The `inducing_allocation='derived'`
+method fails for 5 groups (`[2, 8, 38, 43, 48]`) and falls back to `'proportional'`,
+but the actual allocated inducing points (2796) is less than `num_inducing=3000`.
+This causes a shape mismatch in `transform_variables`:
 
-| Key | Value |
-|-----|-------|
-| Path | `/gladstone/engelhardt/lab/lchumpitaz/datasets/liver/adata_healthy_diseased_merfish.h5ad` |
-| N × D | 309,808 × 317 |
-| Coords | `adata.obsm["X_spatial"]` |
-| Groups | `adata.obs["Cell_Type_final"]` (note: different column name than healthy!) |
-| Expression | `adata.raw.X` |
-
-**Note:** The obs column for cell types is `Cell_Type_final` (not `Cell_Type`). The loader should take a `cell_type_column` preprocessing param.
-
----
-
-### 5. Colon Cancer (Vizgen MERFISH) — NOT IMPLEMENTED
-
-**Status:** No loader. Very large dataset (1.2M cells). Groups come from an external label CSV.
-
-**Notebook:** `../GPzoo/notebooks/HuColonCa-FFPE_april2025.ipynb`
-
-| Key | Value |
-|-----|-------|
-| h5ad path | `/gladstone/engelhardt/lab/jcai/hdp/results/merfish/HuColonCa-FFPE-ImmuOnco-LH_VMSC02001_20220427_seed_2024_K100_T500_baysor_adata_mingenes0_mincounts10.h5ad` |
-| Alt h5ad | `/gladstone/engelhardt/pelka-collaboration/Vizgen_HuColonCa_20220427.h5ad` |
-| Labels CSV | `/gladstone/engelhardt/pelka-collaboration/Vizgen_HuColonCa_20220427_prediction-labels.csv` |
-| N × D | 1,199,060 × 492 |
-| Coords | `adata.obsm["spatial"]` (a pandas DataFrame with x, y columns — index must be sorted) |
-| Groups | From CSV column `cl46v1SubShort_ds` (50 cell types: gB1, gE1_d/n, gM1-7, gS01-15, gTNI01-15, etc.) |
-| Expression | `adata.X` (no `.raw`) |
-| obs | `obs["index"]`, `obs["n_counts"]` only — groups come from external CSV |
-
-**Loading logic (from notebook):**
-```python
-adata = ad.read_h5ad(ad_path)
-df = pd.read_csv(label_path, index_col=0)  # col: cl46v1SubShort_ds
-order = adata.obsm['spatial'].index.argsort()
-X = adata.obsm['spatial'].values[order]  # sort by cell index
-X = rescale_spatial_coords(X) * 50
-Y = adata.X[order].T  # genes × cells
-groupsX = df.cl46v1SubShort_ds.values[::10].codes  # subsampled by 10 in notebook
+```
+RuntimeError: linalg.solve_triangular: Incompatible shapes of A and B
+(2796×2796 and 3000×36012)
 ```
 
-**Notebook hyperparams:** `L=12`, `K=50`, `x_batch_size=13000`, `y_batch_size=D=492`
+The Cholesky `L` has shape `(2796, 2796)` but `stacked` is `(3000, 36012)`.
 
-**Note:** Due to size (1.2M cells), the notebook subsampled `::10` to ~120K cells. Our pipeline should support this or use full data with LCGP.
+**Applied patch (PNMF `models.py`):** After the `derived` allocation call, update
+`M = Z.shape[0]` so the rest of training uses the actual returned count. This stops
+the crash but does not fix the under-allocation itself.
 
----
+**Root cause of the under-allocation (found in `gpzoo/model_utilities.py`
+`mggp_kmeans_inducing_points`, lines ~293–340):**
 
-### 6. 10x Visium squidpy — ALREADY WORKS
-
-**Status:** The current `tenxvisium.py` loads `sq.datasets.visium_hne_adata()` and extracts groups from `obs["cluster"/"leiden"/"louvain"]`. This already works for the squidpy Visium demo (mouse brain H&E section).
-
-**Notebook:** `../GPzoo/notebooks/Visium_MGGP.ipynb`, `../GPzoo/notebooks/Visium_VNNGP.ipynb`
-
-| Key | Value |
-|-----|-------|
-| Source | `sq.datasets.visium_hne_adata()` |
-| N × D | ~3,309 × 15,000 (after QC) |
-| Coords | `adata.obsm["spatial"]` |
-| Groups | `adata.obs["cluster"]` / `"leiden"` / `"louvain"]` |
-| Expression | `adata.X` |
-| Loader | `spatial_factorization/datasets/tenxvisium.py` (current) |
-| Configs | `configs/tenxvisium/` — needs to be created |
-
----
-
-### 7. 10x Visium LIBD DLPFC (SDMBench) — NEEDS PATH PARAM
-
-**Status:** No dedicated loader. The SDMBench h5ad files are the LIBD human dorsolateral prefrontal cortex (DLPFC) dataset (Maynard et al. 2021, *Nature Neuroscience*, https://www.nature.com/articles/s41593-020-00787-0), distributed via the SDMBench benchmark (http://sdmbench.drai.cn/). Structure differs from squidpy Visium (groups in `obs["Region"]` = cortical layers, no cluster columns).
-
-**Notebook:** `../SDMBench/Benchmarks/DLPFC.ipynb`, `../GPzoo/notebooks/Visium_MGGP.ipynb`, `../GPzoo/notebooks/151507_mggp.ipynb`
-
-| Key | Value |
-|-----|-------|
-| Data dir | `/gladstone/engelhardt/home/lchumpitaz/gitclones/SDMBench/Data/` |
-| Files | `151507-151676.h5ad` (12 DLPFC slides, 4 donors × 3 sections each) |
-| N × D | 3,460–4,789 × 33,538 per slide |
-| Coords | `adata.obsm["spatial"]` |
-| Groups | `adata.obs["Region"]` (cortical layers: L1–L6 + WM, NaN = outside tissue) |
-| Ground truth | `adata.obs["ground_truth"]` (manual layer annotations for benchmarking) |
-| Expression | `adata.X` (csr_matrix, no `.raw`) |
-| QC | None — SDMBench data is pre-processed |
-
-**GPzoo ref:** `../GPzoo/gpzoo/datasets/tenxvisium/common.py:31` — `load_visium_with_regions()`
-**GPzoo hyperparams:** `L=12`, `K=50`, `spatial_scale=50`, `lengthscale=10`, `x_batch_size=4221`, `SVGP_INDUCING=4000`
-
----
-
-### 9. osmFISH (SDMBench) — NOT IMPLEMENTED
-
-**Status:** No loader.
-
-| Key | Value |
-|-----|-------|
-| Path | `/gladstone/engelhardt/home/lchumpitaz/gitclones/SDMBench/Data/osmfish.h5ad` |
-| N × D | 4,839 × 33 |
-| Coords | `adata.obsm["spatial"]` |
-| Groups | `adata.obs["ClusterName"]` or `adata.obs["Region"]` |
-| Expression | `adata.X` (dense ndarray, NOT sparse) |
-| Notes | Tiny gene panel (33 genes), mouse somatosensory cortex |
-
----
-
-## Implementation Plan
-
-### Step 1 — Keep `tenxvisium.py` (squidpy Visium) + add `sdmbench.py`
-
-**`tenxvisium.py`** — keep as-is; already loads `sq.datasets.visium_hne_adata()` with cluster/leiden/louvain groups. Just create configs for it.
-
-**`spatial_factorization/datasets/sdmbench.py`** — new loader for SDMBench h5ad slides:
-- Accepts `path` preprocessing param (required)
-- Uses `obs["Region"]` for groups, filters NaN rows
-- No QC filtering (SDMBench data is pre-processed)
-- Uses `adata.X` directly (no `.raw`)
+When `derived` fails to assign any k-means centers to some groups (the "missing
+groups"), the fallback logic computes:
 
 ```python
-DEFAULTS = {
-    "spatial_scale": 50.0,
-    "region_column": "Region",
-    # "path" is required — e.g. ".../SDMBench/Data/151507.h5ad"
-}
+target_per_group = (total_points - n_replace) * group_counts / total_available
 ```
 
-### Step 2 — Create `liver.py` loader
+`group_counts` and `total_available` include **all** groups, even the missing ones.
+The missing groups have `derived_group_counts = 0` but a positive `target_per_group`,
+so they don't appear in `excess_mask`. Their "allocation" is silently subtracted from
+the budget of the non-missing groups, making those groups look like they have more
+excess than they do. The removal loop therefore strips out:
 
-**File:** `spatial_factorization/datasets/liver.py`
-
-New `LiverLoader` supporting both healthy and diseased:
-```python
-DEFAULTS = {
-    "spatial_scale": 50.0,
-    "path": "/gladstone/engelhardt/lab/lchumpitaz/datasets/liver/adata_healthy_merfish.h5ad",
-    "cell_type_column": "Cell_Type",  # use "Cell_Type_final" for diseased
-}
+```
+n_remove_total ≈ n_replace + floor(total_points * missing_fraction)
 ```
 
-Loading:
-- `adata.obsm["X_spatial"]` → coords
-- `adata.raw.X` → expression
-- `adata.obs[cell_type_column]` → groups
+…but only `n_replace` points are added back. The deficit is roughly
+`floor(M * sum(missing_group_cells) / N)`. For colon with 5 missing groups
+this was 3000 − 2796 = 204.
 
-### Step 3 — Create `merfish.py` loader (squidpy MERFISH, 2D)
-
-**File:** `spatial_factorization/datasets/merfish.py`
-
-New `MerfishLoader` using squidpy:
-```python
-DEFAULTS = {
-    "spatial_scale": 50.0,
-    "group_column": "Cell_class",   # 16 cell classes
-    "use_3d": False,                 # if True, use obsm["spatial3d"]
-}
-```
-
-Loading:
-- `sq.datasets.merfish()`
-- `adata.obsm["spatial"]` (2D) or `adata.obsm["spatial3d"]` (3D, X/Y/Bregma)
-- `adata.obs["Cell_class"]` → groups
-- `adata.X` → expression (no `.raw`)
-
-For now implement 2D only; 3D is a future extension (pipeline currently assumes 2D coords).
-
-### Step 4 — Create `colon.py` loader
-
-**File:** `spatial_factorization/datasets/colon.py`
-
-New `ColonLoader`:
-```python
-DEFAULTS = {
-    "spatial_scale": 50.0,
-    "h5ad_path": "/gladstone/engelhardt/lab/jcai/hdp/results/merfish/HuColonCa-FFPE-ImmuOnco-LH_VMSC02001_20220427_seed_2024_K100_T500_baysor_adata_mingenes0_mincounts10.h5ad",
-    "labels_path": "/gladstone/engelhardt/pelka-collaboration/Vizgen_HuColonCa_20220427_prediction-labels.csv",
-    "group_column": "cl46v1SubShort_ds",
-}
-```
-
-Loading (from notebook pattern):
-- Load h5ad + labels CSV
-- Sort cells by `adata.obsm["spatial"].index.argsort()`
-- Merge groups from CSV by position (already aligned)
-- `adata.X` → expression
-- No `.raw`
-
-**Warning:** At 1.2M cells, full data may require large RAM. Consider `subsample` preprocessing param.
-
-### Step 5 — Create `osmfish.py` loader
-
-**File:** `spatial_factorization/datasets/osmfish.py`
-
-New `OsmfishLoader`:
-```python
-DEFAULTS = {
-    "spatial_scale": 50.0,
-    "path": "/gladstone/engelhardt/home/lchumpitaz/gitclones/SDMBench/Data/osmfish.h5ad",
-    "group_column": "ClusterName",
-}
-```
-
-Loading:
-- `adata.obsm["spatial"]` → coords
-- `adata.X` (dense ndarray) → expression (33 genes)
-- `adata.obs["ClusterName"]` → groups
-
-### Step 6 — Register all in `__init__.py`
-
-```python
-LOADERS = {
-    "slideseq":   SlideseqLoader,     # existing
-    "tenxvisium": TenxVisiumLoader,   # existing (squidpy Visium)
-    "sdmbench":   SDMBenchLoader,     # new (SDMBench h5ad, path param)
-    "liver":      LiverLoader,         # new
-    "merfish":    MerfishLoader,       # new (squidpy MERFISH 3D)
-    "colon":      ColonLoader,         # new
-    "osmfish":    OsmfishLoader,       # new
-}
-```
-
-### Step 7 — Create configs
-
-One `configs/<dataset>/` directory per dataset with:
-- `general.yaml` — superset for `generate` command (20k epochs)
-- `general_test.yaml` — 10-epoch test
-
-| Dataset | Config dir | `dataset:` key | `path:` needed |
-|---------|-----------|----------------|----------------|
-| SlideseqV2 | `configs/slideseq/` | `slideseq` | No |
-| MERFISH squidpy | `configs/merfish/` | `merfish` | No |
-| Liver healthy | `configs/liver/` | `liver` | Yes (healthy path) |
-| Liver diseased | `configs/liver_diseased/` | `liver` | Yes (diseased path + `cell_type_column: Cell_Type_final`) |
-| Visium squidpy | `configs/tenxvisium/` | `tenxvisium` | No |
-| Visium SDMBench 151507 | `configs/sdmbench/` | `sdmbench` | Yes — SDMBench path |
-| osmFISH | `configs/osmfish/` | `osmfish` | Yes |
-| Colon | `configs/colon/` | `colon` | Yes |
+**Proper fix (to be done in GPzoo in a separate session):** Compute
+`target_per_group` only over the non-missing groups so their excess is calculated
+correctly, then allocate the full remaining budget among them. The missing groups
+get their points exclusively from the fallback k-means step.
 
 ---
 
-## File Change Summary
+## Bug 4 — Analyze crash: K not saved to checkpoint (LCGP/MGGP_LCGP)
 
-| File | Action |
-|------|--------|
-| `spatial_factorization/datasets/tenxvisium.py` | Keep as-is (squidpy Visium, already works) |
-| `spatial_factorization/datasets/sdmbench.py` | New: path-based, `obs["Region"]`, no QC |
-| `spatial_factorization/datasets/liver.py` | New: `obsm["X_spatial"]`, `raw.X`, configurable group column |
-| `spatial_factorization/datasets/merfish.py` | New: `sq.datasets.merfish()`, `obsm["spatial"]`, `obs["Cell_class"]` |
-| `spatial_factorization/datasets/colon.py` | New: path-based, external labels CSV, `obsm["spatial"]` sorted by index |
-| `spatial_factorization/datasets/osmfish.py` | New: path-based, `obsm["spatial"]`, `obs["ClusterName"]`, dense X |
-| `spatial_factorization/datasets/__init__.py` | Register all new loaders |
-| `configs/merfish/` | New: general.yaml + general_test.yaml |
-| `configs/liver/` | New: general.yaml + general_test.yaml (healthy) |
-| `configs/liver_diseased/` | New: general.yaml + general_test.yaml (diseased, Cell_Type_final) |
-| `configs/tenxvisium/` | New: general.yaml + general_test.yaml (one slide, e.g. 151507) |
-| `configs/osmfish/` | New: general.yaml + general_test.yaml |
-| `configs/colon/` | New: general.yaml + general_test.yaml |
+**Affected:** `osmfish_mggp_lcgp`
+**Stage:** analyze
+
+**Root cause:** `_load_model()` in `analyze.py` reconstructs the LCGP/MGGP_LCGP
+prior using a hardcoded or config-derived `K=50`, but the saved `model.pth` has
+`Lu` shaped `[10, 4839, 20]` (K=20, from a prior run with different config).
+The `state_dict` load then fails:
+
+```
+RuntimeError: size mismatch for Lu: copying a param with shape
+torch.Size([10, 4839, 20]) from checkpoint,
+the shape in current model is torch.Size([10, 4839, 50]).
+```
+
+**Fix:**
+1. In `train.py` `_save_model()`, add `K` to the saved hyperparameters when
+   `config.local` is True.
+2. In `analyze.py` `_load_model()`, read `K` from `state["hyperparameters"]`
+   when reconstructing an LCGP or MGGP_LCGP prior.
 
 ---
 
-## Key Notes Per Dataset
+## Bug 5 — Runner job name collision: liver_healthy vs liver_diseased
 
-### Coordinate conventions
-| Dataset | obsm key | Notes |
-|---------|----------|-------|
-| SlideseqV2 | `obsm["spatial"]` | Standard |
-| MERFISH squidpy | `obsm["spatial"]` (2D) or `obsm["spatial3d"]` (3D) | 3D has Bregma as Z |
-| Liver healthy | `obsm["X_spatial"]` | Not `"spatial"` |
-| Liver diseased | `obsm["X_spatial"]` | Not `"spatial"` |
-| Colon | `obsm["spatial"]` (pandas DataFrame) | Must sort by `.index.argsort()` |
-| Visium DLPFC | `obsm["spatial"]` | Standard |
-| osmFISH | `obsm["spatial"]` | Standard |
+**Affected:** All liver jobs (healthy silently overwritten by diseased in status tracking)
+**Stage:** all
 
-### Expression source
-| Dataset | Source | Format |
-|---------|--------|--------|
-| SlideseqV2 | `adata.raw.to_adata().X` then filter MT | sparse |
-| MERFISH squidpy | `adata.X` | sparse |
-| Liver (both) | `adata.raw.X` | dense |
-| Colon | `adata.X` | dense |
-| Visium DLPFC | `adata.X` | sparse |
-| osmFISH | `adata.X` | dense ndarray |
+**Root cause:** Both `configs/liver/healthy/general_test.yaml` and
+`configs/liver/diseased/general_test.yaml` have `dataset: liver`. When
+`generate_configs` runs on each, it sets `model_config.name = f"{config.dataset}_{variant['name']}"`,
+producing identical names (`liver_pnmf`, `liver_svgp`, etc.) for both.
 
-### Groups column
-| Dataset | Column | N groups |
-|---------|--------|----------|
-| SlideseqV2 | `obs["cluster"]` | ~20 |
-| MERFISH squidpy | `obs["Cell_class"]` | 16 |
-| Liver healthy | `obs["Cell_Type"]` | 9 |
-| Liver diseased | `obs["Cell_Type_final"]` | TBD |
-| Colon | external CSV `cl46v1SubShort_ds` | 50 |
-| Visium DLPFC | `obs["Region"]` (filter NaN) | ~7 |
-| osmFISH | `obs["ClusterName"]` | ~33 |
+In the runner:
+- `self.run_status.jobs[job.name]` is a dict → healthy entries overwritten by diseased
+- `StatusManager.jobs` is a dict keyed by `f"{config.name}_train"` → same collision
 
-### Dataset sizes
-| Dataset | N cells | D genes | Notes |
-|---------|---------|---------|-------|
-| SlideseqV2 | ~41K | ~4K | After QC |
-| MERFISH squidpy | 73K | 161 | Squidpy built-in |
-| Liver healthy | 90K | 317 | MERFISH panel |
-| Liver diseased | 310K | 317 | Large — may need batching |
-| Colon | 1.2M | 492 | Very large — consider subsampling |
-| Visium 151507 | 4.2K | 33.5K | One slide; many genes |
-| osmFISH | 4.8K | 33 | Tiny |
+The result: liver_healthy jobs run but their status is tracked under the diseased
+names, making the final status report incorrect and potentially causing GPU slot
+accounting bugs.
+
+**Fix:** Derive a unique job name from the output directory rather than from
+`config.name`. E.g., in Phase 3 of `runner.py`:
+
+```python
+# Use output_dir to derive a unique prefix (avoids dataset name collisions)
+out_path = Path(config.output_dir)
+# e.g. "outputs/liver_test/healthy" → "liver_test_healthy"
+unique_prefix = "_".join(out_path.parts[1:])  # skip "outputs/"
+job_name = f"{unique_prefix}_{config.model_name}"
+```
+
+This is independent of `config.dataset` and guaranteed unique across all configs.
 
 ---
 
-## Important Path Reference
+## Summary Table
 
-```
-# SDMBench Visium (12 slides)
-/gladstone/engelhardt/home/lchumpitaz/gitclones/SDMBench/Data/151507.h5ad  (4226 × 33538)
-/gladstone/engelhardt/home/lchumpitaz/gitclones/SDMBench/Data/151508.h5ad
-...
-/gladstone/engelhardt/home/lchumpitaz/gitclones/SDMBench/Data/151676.h5ad
-/gladstone/engelhardt/home/lchumpitaz/gitclones/SDMBench/Data/osmfish.h5ad (4839 × 33)
+| # | Bug | Datasets | Stage | Fix location |
+|---|-----|----------|-------|-------------|
+| 1 | SVGP analyze OOM (full N) | merfish, colon, liver_dis | analyze | `analyze.py` — batch `get_factors` over N |
+| 2 | LCGP analyze OOM (Su_knn) | merfish, colon | analyze | same fix as #1 |
+| 3 | MGGP_SVGP train crash (alloc mismatch) | colon | train | **Patched** in PNMF (`M = Z.shape[0]`); root cause in GPzoo `mggp_kmeans_inducing_points` — fix `target_per_group` to exclude missing groups |
+| 4 | LCGP/MGGP_LCGP K not saved | osmfish | analyze | `train.py` save K; `analyze.py` load K |
+| 5 | Liver job name collision | liver healthy+diseased | runner | `runner.py` — use output_dir for job name |
 
-# Liver MERFISH
-/gladstone/engelhardt/lab/lchumpitaz/datasets/liver/adata_healthy_merfish.h5ad          (90408 × 317)
-/gladstone/engelhardt/lab/lchumpitaz/datasets/liver/adata_healthy_diseased_merfish.h5ad (309808 × 317)
-/gladstone/engelhardt/lab/lchumpitaz/datasets/liver/readme.txt
-
-# Colon cancer MERFISH
-/gladstone/engelhardt/lab/jcai/hdp/results/merfish/HuColonCa-FFPE-ImmuOnco-LH_VMSC02001_20220427_seed_2024_K100_T500_baysor_adata_mingenes0_mincounts10.h5ad  (1199060 × 492)
-/gladstone/engelhardt/pelka-collaboration/Vizgen_HuColonCa_20220427.h5ad               (alt)
-/gladstone/engelhardt/pelka-collaboration/Vizgen_HuColonCa_20220427_prediction-labels.csv  (groups)
-
-# MERFISH squidpy (3D)
-sq.datasets.merfish()  # downloaded automatically (73655 × 161, obsm["spatial3d"])
-
-# GPzoo notebooks (reference)
-../GPzoo/notebooks/merfish_squidpy.ipynb              # MERFISH 3D squidpy
-../GPzoo/notebooks/MERFISH_MGGP.ipynb                 # MERFISH Moffitt CSV (older, different data)
-../GPzoo/notebooks/HuColonCa-FFPE_april2025.ipynb     # Colon
-../GPzoo/notebooks/liver_mggp_healthy.ipynb            # Liver healthy
-../GPzoo/notebooks/liver_mggp_desease.ipynb            # Liver diseased
-../SDMBench/Benchmarks/liver.ipynb                     # Liver SDMBench benchmarks
-../SDMBench/Benchmarks/colon.ipynb                     # Colon SDMBench benchmarks
-```
+Bugs 1+2 share the same fix (batched analyze). Bug 4 is a one-line save + one-line
+load. Bug 5 is a naming change in the runner. Bug 3 may require a GPzoo fix.

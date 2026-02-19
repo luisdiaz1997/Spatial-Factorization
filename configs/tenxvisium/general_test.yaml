@@ -39,7 +39,7 @@ model:
   inducing_allocation: derived
 
 training:
-  max_iter: 200
+  max_iter: 10
   learning_rate: 2e-3
   optimizer: Adam
   tol: 1e-4

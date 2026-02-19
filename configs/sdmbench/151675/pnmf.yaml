@@ -1,0 +1,30 @@
+name: sdmbench_pnmf
+seed: 67
+dataset: sdmbench
+output_dir: outputs/sdmbench_test/151675
+
+preprocessing:
+  spatial_scale: 50.0
+  path: /gladstone/engelhardt/home/lchumpitaz/gitclones/SDMBench/Data/151675.h5ad
+  region_column: Region
+  min_group_fraction: 0.01
+
+model:
+  loadings_mode: multiplicative
+  n_components: 12
+  mode: expanded
+  training_mode: standard
+  E: 3
+  spatial: false
+  prior: GaussianPrior
+
+training:
+  max_iter: 10
+  learning_rate: 2e-3
+  optimizer: Adam
+  tol: 1e-4
+  verbose: false
+  device: gpu
+  batch_size: 4221
+  y_batch_size: 2000
+  shuffle: true

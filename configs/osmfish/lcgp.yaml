@@ -1,0 +1,37 @@
+name: osmfish_lcgp
+seed: 67
+dataset: osmfish
+output_dir: outputs/osmfish_test
+
+preprocessing:
+  spatial_scale: 50.0
+  path: /gladstone/engelhardt/home/lchumpitaz/gitclones/SDMBench/Data/osmfish.h5ad
+  group_column: ClusterName
+  min_group_fraction: 0.01
+
+model:
+  loadings_mode: multiplicative
+  n_components: 10
+  mode: expanded
+  training_mode: standard
+  E: 3
+  spatial: true
+  prior: LCGP
+  sigma: 1.0
+  kernel: Matern32
+  lengthscale: 8.0
+  train_lengthscale: false
+  local: true
+  K: 20
+  precompute_knn: true
+
+training:
+  max_iter: 10
+  learning_rate: 2e-3
+  optimizer: Adam
+  tol: 1e-4
+  verbose: false
+  device: gpu
+  batch_size: 4839
+  y_batch_size: 33
+  shuffle: true

@@ -76,7 +76,7 @@ Spatial-Factorization/
 │       └── osmfish.py         # osmFISH SDMBench loader (path-based, dense X)
 ├── configs/slideseq/
 │   ├── general.yaml           # Reference config (n_components=10, num_inducing=3000, lengthscale=8.0, K=50)
-│   ├── general_test.yaml      # 200-epoch test
+│   ├── general_test.yaml      # 10-epoch test
 │   ├── pnmf.yaml              # Non-spatial baseline
 │   ├── svgp.yaml              # SVGP (no groups, full training)
 │   ├── mggp_svgp.yaml         # MGGP_SVGP (groups, full training)
@@ -295,6 +295,8 @@ The `prior` field in YAML/config is only used for:
 - Print statements during training
 - Saved to `model.pth` hyperparameters for documentation
 
+**LCGP checkpoints** also save `K` in hyperparameters so `_load_model()` can reconstruct the correct KNN neighborhood size. Old checkpoints missing `K` default to 50 with a warning.
+
 ### 5. Factor Ordering by Moran's I
 
 The analyze stage reorders all factor-related outputs by descending Moran's I before saving. Factor 0 always has the highest spatial autocorrelation. This applies to: `factors.npy`, `scales.npy`, `loadings.npy`, `Lu.pt`, group loadings, and gene enrichment. The `moran_i.csv` reflects the new order (already sorted descending).
@@ -302,6 +304,8 @@ The analyze stage reorders all factor-related outputs by descending Moran's I be
 ### 6. `--resume` and Pickle Preservation
 
 `train --resume` warm-starts from a saved checkpoint using `_create_warm_start_pnmf`, which subclasses PNMF to inject the loaded prior and W instead of random initialization. After `fit()` completes, `model.__class__` is reset to `PNMF` before saving so that `_save_model` can pickle identically to a normal train run.
+
+**Graceful fallback:** If no checkpoint exists when `--resume` is passed, training proceeds from scratch instead of raising an error. This makes `--resume` safe for batch runs (e.g. `run all --resume`) where some models may not yet have a checkpoint.
 
 **Why this matters:** PNMF training explicitly sets `Z.requires_grad=False`, `kernel.sigma.requires_grad=False`, and `kernel.lengthscale.requires_grad=False` on the GP prior. These flags are preserved in `model.pkl` but are NOT stored in `model.pth` (state dicts save values only, not `requires_grad`). If the pkl is missing or corrupt, `.pth` reconstruction via `_load_model` would load Z with `requires_grad=True`, putting Z in the optimizer and causing NaN gradients on the first backward step.
 
@@ -320,7 +324,24 @@ The analyze stage reorders all factor-related outputs by descending Moran's I be
 - All `general.yaml` configs use `min_group_fraction: 0.01`
 - Colon additionally has `subsample: ~` (no subsampling, full 1.2M cells)
 
-### 8. Groups vs No-Groups Pipeline Behavior
+### 8. Auto-Clamping of Data Dimensions (`train.py`)
+
+`_clamp_data_dims()` runs before PNMF construction and silently clamps three config params to the actual data size:
+- `num_inducing` → min(num_inducing, N) — prevents SVGP from requesting more inducing points than data points
+- `batch_size` → min(batch_size, N) — prevents batch size exceeding dataset size
+- `y_batch_size` → min(y_batch_size, D) — prevents gene batch size exceeding number of genes
+
+A note is printed when clamping occurs. This means configs written for large datasets (e.g. `num_inducing=3000`) work correctly on small datasets (e.g. osmfish N=4839, tenxvisium N~3K) without manual tuning.
+
+### 9. Batched GP Forward Pass in Analyze (`analyze.py`)
+
+For large datasets, calling the GP forward pass on all N cells at once can OOM. `_get_factors_batched()` chunks the data into batches (default 10000 cells), runs `_get_spatial_qF` per batch, and concatenates results.
+
+- Controlled via `analyze_batch_size` in the `training:` section of the config (default: 10000)
+- KNN for LCGP is computed against the full stored `gp.Z` (all training points), so batching X is semantically correct
+- Pre-computed `(factors, scales)` are reused for reconstruction error, Poisson deviance, and group loadings — avoids running the GP forward pass 3+ extra times
+
+### 10. Groups vs No-Groups Pipeline Behavior
 
 When `groups: false`:
 - **train**: Only passes `coordinates` to `model.fit()` (no `groups` arg)
@@ -346,12 +367,15 @@ spatial_factorization train      -c configs/slideseq/svgp_test.yaml  # Model-spe
 spatial_factorization analyze    -c configs/slideseq/svgp_test.yaml
 spatial_factorization figures    -c configs/slideseq/svgp_test.yaml
 
-# Resume training from a checkpoint (appends to ELBO history)
+# Resume training from a checkpoint (appends to ELBO history; trains from scratch if no checkpoint)
 spatial_factorization train --resume -c configs/slideseq/svgp_test.yaml
 
 # Chain multiple stages with `run`
 spatial_factorization run train analyze figures -c configs/slideseq/svgp_test.yaml
 spatial_factorization run preprocess train analyze figures -c configs/slideseq/pnmf.yaml
+
+# Resume within a chained run
+spatial_factorization run train analyze figures --resume -c configs/slideseq/svgp_test.yaml
 ```
 
 Stages passed to `run` are automatically sorted into pipeline order (`preprocess → train → analyze → figures`).
@@ -365,11 +389,17 @@ Run multiple models in parallel with resource-aware GPU/CPU scheduling.
 ### Usage
 
 ```bash
-# Generate per-model configs from general.yaml
+# Generate per-model configs from general.yaml (always writes into the same dir as general.yaml)
 spatial_factorization generate -c configs/slideseq/general.yaml
 
-# Run all models in parallel (pnmf, SVGP, MGGP_SVGP, LCGP, MGGP_LCGP)
+# Run all models for one dataset in parallel (pnmf, SVGP, MGGP_SVGP, LCGP, MGGP_LCGP)
 spatial_factorization run all -c configs/slideseq/general.yaml
+
+# Run ALL datasets at once (recurse through configs/ for every general_test.yaml)
+spatial_factorization run all -c configs/ --config-name general_test.yaml
+
+# Resume all models across all datasets (trains from scratch if no checkpoint exists)
+spatial_factorization run all -c configs/ --config-name general.yaml --resume
 
 # Force re-preprocessing
 spatial_factorization run all -c configs/slideseq/general.yaml --force
@@ -377,6 +407,14 @@ spatial_factorization run all -c configs/slideseq/general.yaml --force
 # Dry run (show plan without executing)
 spatial_factorization run all -c configs/slideseq/general.yaml --dry-run
 ```
+
+**`--config-name`** (default: `general.yaml`): when `config` is a directory, this is the filename to search for recursively. Use `--config-name general_test.yaml` to run quick tests across all datasets.
+
+**Multi-dataset behavior:**
+- Preprocessing runs once per unique `output_dir` (not once globally)
+- Job names are unique across nested directories: `{output_dir_parts}_{model_name}` (e.g. `liver_test_healthy_mggp_svgp`)
+- Each dataset gets its own `logs/` directory inside its `output_dir`
+- `run_status.json` is saved alongside the `configs/` directory for directory-based runs
 
 ### Live Status Display
 
@@ -418,7 +456,8 @@ Parses both PNMF output formats:
 - **Analyze**: Same pattern - parallel with GPU + CPU fallback
 - **CPU fallback**: When all GPUs are busy, at least one job runs on CPU
 - **Training priority**: Training jobs get priority over analyze jobs for GPU/CPU resources. Analyze only starts when no pending training jobs are waiting for resources.
-- **Logs**: Each job writes to `outputs/{dataset}/logs/{model}.log`
+- **Logs**: Each job writes to `{output_dir}/logs/{model}.log` (one `logs/` per dataset)
+- **Status sort**: Active jobs (training/analyzing) float to the top of the status table; completed/failed sink to the bottom
 
 ## Available Configs
 
@@ -429,7 +468,7 @@ All `general.yaml` files share the same model hyperparams: `n_components=10`, `n
 | Config | Model | Groups | Local | Epochs | Use |
 |--------|-------|--------|-------|--------|-----|
 | `general.yaml` | All 5 models | N/A | N/A | 20000 | Multiplex training |
-| `general_test.yaml` | All 5 models | N/A | N/A | 200 | **Quick multiplex test** |
+| `general_test.yaml` | All 5 models | N/A | N/A | 10 | **Quick multiplex test** |
 | `pnmf.yaml` | Non-spatial PNMF | N/A | N/A | 20000 | Baseline |
 | `svgp.yaml` | SVGP | false | false | 20000 | Full training |
 | `mggp_svgp.yaml` | MGGP_SVGP | true | false | 20000 | Full training |
@@ -469,8 +508,11 @@ rm -rf outputs/slideseq_test/pnmf outputs/slideseq_test/svgp outputs/slideseq_te
 **IMPORTANT: Use `general_test.yaml` for quick tests, NOT `general.yaml`!**
 
 ```bash
-# Quick test of full multiplex pipeline (10 epochs, outputs to slideseq_test/)
+# Quick test of one dataset (10 epochs)
 spatial_factorization run all -c configs/slideseq/general_test.yaml
+
+# Quick test of ALL datasets at once
+spatial_factorization run all -c configs/ --config-name general_test.yaml
 
 # Single model quick test
 spatial_factorization run train analyze figures -c configs/slideseq/svgp_test.yaml
@@ -483,9 +525,16 @@ spatial_factorization run train analyze figures -c configs/slideseq/svgp_test.ya
 To run tests with visible live output in a split tmux pane:
 
 ```bash
-# Split current window horizontally and run test on right pane
-tmux split-window -t 15:0 -h
-tmux send-keys -t 15:0.1 'source ~/miniconda3/etc/profile.d/conda.sh && conda activate factorization && python -m spatial_factorization run all -c configs/slideseq/general_test.yaml' Enter
+# Detect the active tmux session/window, split, and run test
+SESSION=$(tmux display-message -p '#S')
+WINDOW=$(tmux display-message -p '#I')
+tmux split-window -t "${SESSION}:${WINDOW}" -h
+tmux send-keys -t "${SESSION}:${WINDOW}.1" \
+  'source ~/miniconda3/etc/profile.d/conda.sh && conda activate factorization && spatial_factorization run all -c configs/slideseq/general_test.yaml' Enter
+
+# Or run all datasets at once
+tmux send-keys -t "${SESSION}:${WINDOW}.1" \
+  'source ~/miniconda3/etc/profile.d/conda.sh && conda activate factorization && spatial_factorization run all -c configs/ --config-name general_test.yaml' Enter
 ```
 
 This allows:
@@ -506,8 +555,10 @@ This allows:
 | 4 | **DONE** | Figures command (spatial plots, enrichment, gene plots) |
 | 5 | **DONE** | Multiplex pipeline (parallel training, live status, GPU/CPU scheduling) |
 | 6 | **DONE** | LCGP integration (local=True support, VNNGP-style covariance) |
-| 7 | **DONE** | `--resume` flag for `train` (warm-start from checkpoint, append ELBO history) |
+| 7 | **DONE** | `--resume` flag for `train` (warm-start from checkpoint, append ELBO history; graceful fallback to scratch if no checkpoint) |
 | 8 | **DONE** | Datasets integration (7 loaders: slideseq, tenxvisium, sdmbench, liver, merfish, colon, osmfish; configs for all datasets including 12 SDMBench slides and healthy/diseased liver) |
+| 9 | **DONE** | Multi-dataset parallel runner (`run all -c configs/ --config-name general_test.yaml`; unique job names; per-dataset log dirs; preprocess once per output_dir) |
+| 10 | **DONE** | Robustness: auto-clamp num_inducing/batch_size/y_batch_size to data dims; batched GP forward pass in analyze (`analyze_batch_size`); factor reuse across metrics; K persisted in LCGP checkpoints |
 
 ## Relationship to Other Repos
 
@@ -524,6 +575,23 @@ This allows:
 - `local=True` params: `K=50`, `precompute_knn=True`
 - Non-multigroup SVGP uses K-means inducing points + `batched_Matern32` kernel
 - LCGP uses all data points as inducing (M=N) with VNNGP-style `S = Lu @ Lu.T` covariance
+
+---
+
+## Data Storage Layout
+
+Large files are stored in `/gladstone/engelhardt/lab/lchumpitaz/` (48T available) and symlinked into the repo to avoid filling the home filesystem (888G total, was at 100%).
+
+| Symlink in repo | Real location | Contents |
+|----------------|---------------|----------|
+| `outputs/` | `/gladstone/engelhardt/lab/lchumpitaz/Spatial-Factorization/outputs/` | All model outputs (44GB+) |
+| `data/anndata/` | `/gladstone/engelhardt/lab/lchumpitaz/datasets/squidpy/` | squidpy-cached h5ad files (merfish, slideseqv2, visium) |
+| `(SDMBench repo)/Data/` | `/gladstone/engelhardt/lab/lchumpitaz/datasets/sdmbench/` | 12 DLPFC slides + osmfish.h5ad |
+
+**Left in place (other people's data):**
+- Colon h5ad: `/gladstone/engelhardt/lab/jcai/hdp/results/merfish/...`
+- Colon labels: `/gladstone/engelhardt/pelka-collaboration/...`
+- Liver h5ad: `/gladstone/engelhardt/lab/lchumpitaz/datasets/liver/` (already in lab dir)
 
 ---
 

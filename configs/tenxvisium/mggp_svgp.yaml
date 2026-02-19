@@ -1,0 +1,41 @@
+name: tenxvisium_mggp_svgp
+seed: 67
+dataset: tenxvisium
+output_dir: outputs/tenxvisium_test
+
+preprocessing:
+  spatial_scale: 50.0
+  filter_mt: true
+  min_counts: 100
+  min_cells: 10
+  min_group_fraction: 0.01
+
+model:
+  loadings_mode: multiplicative
+  n_components: 10
+  mode: expanded
+  training_mode: standard
+  E: 3
+  spatial: true
+  prior: SVGP
+  sigma: 1.0
+  kernel: Matern32
+  lengthscale: 8.0
+  train_lengthscale: false
+  cholesky_mode: exp
+  diagonal_only: false
+  num_inducing: 2000
+  groups: true
+  group_diff_param: 1.0
+  inducing_allocation: derived
+
+training:
+  max_iter: 10
+  learning_rate: 2e-3
+  optimizer: Adam
+  tol: 1e-4
+  verbose: false
+  device: gpu
+  batch_size: 3000
+  y_batch_size: 2000
+  shuffle: true

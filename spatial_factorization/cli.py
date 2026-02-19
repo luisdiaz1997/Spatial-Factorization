@@ -78,7 +78,9 @@ def generate(config):
 @click.option("--config", "-c", required=True, type=click.Path(exists=True), help="Path to config YAML or directory")
 @click.option("--force", is_flag=True, help="Force re-run preprocessing")
 @click.option("--dry-run", is_flag=True, help="Show plan without executing")
-def run_pipeline(stages, config, force, dry_run):
+@click.option("--resume", is_flag=True, help="Resume training: resumes models with a checkpoint, trains new ones from scratch")
+@click.option("--config-name", default="general.yaml", show_default=True, help="Config filename to search for when config is a directory (e.g. general_test.yaml)")
+def run_pipeline(stages, config, force, dry_run, resume, config_name):
     """Run pipeline stages sequentially, or run all models in parallel.
 
     \b
@@ -106,6 +108,12 @@ def run_pipeline(stages, config, force, dry_run):
         # All models from all datasets (parallel)
         spatial_factorization run all -c configs/
 
+        # All datasets using test configs
+        spatial_factorization run all -c configs/ --config-name general_test.yaml
+
+        # Resume training across all models (trains new ones from scratch)
+        spatial_factorization run all -c configs/slideseq/general.yaml --resume
+
         # Dry run to see plan
         spatial_factorization run all -c configs/slideseq/general.yaml --dry-run
 
@@ -118,7 +126,7 @@ def run_pipeline(stages, config, force, dry_run):
     if "all" in stages:
         from .runner import JobRunner
 
-        JobRunner(config, force_preprocess=force, dry_run=dry_run).run()
+        JobRunner(config, force_preprocess=force, dry_run=dry_run, resume=resume, config_name=config_name).run()
         return
 
     # Validate stages
@@ -134,7 +142,11 @@ def run_pipeline(stages, config, force, dry_run):
         click.echo(f"\n{'='*60}")
         click.echo(f"  Stage: {stage}")
         click.echo(f"{'='*60}\n")
-        _run_stage(stage, config)
+        if stage == "train" and resume:
+            from .commands import train as train_cmd
+            train_cmd.run(config, resume=True)
+        else:
+            _run_stage(stage, config)
     click.echo(f"\nAll stages complete.")
 
 

@@ -44,6 +44,8 @@ def _save_model(model, config: Config, model_dir: Path) -> None:
         state["hyperparameters"]["prior"] = config.prior
         state["hyperparameters"]["multigroup"] = config.groups
         state["hyperparameters"]["local"] = config.local
+        if config.local:
+            state["hyperparameters"]["K"] = config.model.get("K", 50)
 
     torch.save(state, model_dir / "model.pth")
 
@@ -118,6 +120,29 @@ def _create_warm_start_pnmf(loaded_model, config: Config, pnmf_kwargs: dict):
         return _WarmStartPNMF(**pnmf_kwargs)
 
 
+def _clamp_data_dims(kwargs: dict, N: int, D: int) -> dict:
+    """Clamp num_inducing, batch_size, y_batch_size to actual data dimensions."""
+    if kwargs.get("num_inducing") is not None:
+        clamped = min(kwargs["num_inducing"], N)
+        if clamped < kwargs["num_inducing"]:
+            print(f"  Note: num_inducing clamped {kwargs['num_inducing']} → {clamped} (N={N})")
+        kwargs["num_inducing"] = clamped
+
+    if kwargs.get("batch_size") is not None:
+        clamped = min(kwargs["batch_size"], N)
+        if clamped < kwargs["batch_size"]:
+            print(f"  Note: batch_size clamped {kwargs['batch_size']} → {clamped} (N={N})")
+        kwargs["batch_size"] = clamped
+
+    if kwargs.get("y_batch_size") is not None:
+        clamped = min(kwargs["y_batch_size"], D)
+        if clamped < kwargs["y_batch_size"]:
+            print(f"  Note: y_batch_size clamped {kwargs['y_batch_size']} → {clamped} (D={D})")
+        kwargs["y_batch_size"] = clamped
+
+    return kwargs
+
+
 def _get_training_metadata(model, config: Config, data, train_time: float, prev_n_iterations: int = 0) -> dict:
     """Build training metadata dict."""
     return {
@@ -165,6 +190,9 @@ def run(config_path: str, resume: bool = False):
     mode = config.model.get("mode", "expanded")
     device = config.training.get("device", "cpu")
 
+    # Clamp model/training params to actual data dimensions
+    pnmf_kwargs = _clamp_data_dims(config.to_pnmf_kwargs(), data.n_spots, data.n_genes)
+
     # Determine model output directory early (needed for resume)
     model_dir = output_dir / config.model_name
 
@@ -173,10 +201,10 @@ def run(config_path: str, resume: bool = False):
     if resume:
         pth_path = model_dir / "model.pth"
         if not pth_path.exists():
-            raise FileNotFoundError(
-                f"No saved model found at {pth_path}. "
-                "Cannot resume. Run without --resume to train from scratch."
-            )
+            print(f"  Note: no checkpoint at {pth_path}, training from scratch.")
+            resume = False
+
+    if resume:
         print(f"Resuming training from: {model_dir}/")
         from .analyze import _load_model
         loaded_model = _load_model(model_dir)
@@ -189,10 +217,10 @@ def run(config_path: str, resume: bool = False):
             prev_n_iterations = prev_meta.get("n_iterations", 0)
         print(f"  Previous iterations: {prev_n_iterations}")
 
-        model = _create_warm_start_pnmf(loaded_model, config, config.to_pnmf_kwargs())
+        model = _create_warm_start_pnmf(loaded_model, config, pnmf_kwargs)
         print(f"Continuing PNMF with {n_components} components (mode={mode}, device={device})...")
     else:
-        model = PNMF(random_state=config.seed, **config.to_pnmf_kwargs())
+        model = PNMF(random_state=config.seed, **pnmf_kwargs)
         print(f"Training PNMF with {n_components} components (mode={mode}, device={device})...")
 
     # Train (spatial models require coordinates; groups are optional)
@@ -203,7 +231,7 @@ def run(config_path: str, resume: bool = False):
             K = config.model.get('K', 50)
             print(f"  LCGP: K={K}")
         else:
-            print(f"  Inducing points (M): {config.model.get('num_inducing', 3000)}")
+            print(f"  Inducing points (M): {pnmf_kwargs.get('num_inducing', 3000)}")
         print(f"  Kernel: {config.model.get('kernel', 'Matern32')} (lengthscale={config.model.get('lengthscale', 1.0)})")
 
         fit_kwargs = dict(

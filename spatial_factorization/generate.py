@@ -86,13 +86,11 @@ def generate_configs(general_path: str | Path) -> Dict[str, Path]:
     # Load general config
     config = Config.from_yaml(general_path)
 
-    # Determine output directory for generated configs
-    # Use same directory as general.yaml, or fallback to configs/{dataset}/
-    if general_path.parent.name == config.dataset:
-        output_dir = general_path.parent
-    else:
-        output_dir = Path("configs") / config.dataset
-        output_dir.mkdir(parents=True, exist_ok=True)
+    # Always generate per-model configs into the same directory as general.yaml.
+    # This correctly handles nested layouts like configs/liver/healthy/ and
+    # configs/liver/diseased/ — previously the fallback to configs/{dataset}/
+    # caused both to overwrite each other in configs/liver/.
+    output_dir = general_path.parent
 
     generated = {}
 

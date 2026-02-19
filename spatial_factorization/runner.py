@@ -98,6 +98,7 @@ class Job:
     error: Optional[str] = None
     log_file: Optional[Path] = None
     thread: Optional[threading.Thread] = None
+    resume: bool = False  # Whether to resume training from a checkpoint
 
 
 @dataclass
@@ -136,6 +137,8 @@ class JobRunner:
         config_path: str | Path,
         force_preprocess: bool = False,
         dry_run: bool = False,
+        resume: bool = False,
+        config_name: str = "general.yaml",
     ):
         """Initialize the job runner.
 
@@ -143,10 +146,14 @@ class JobRunner:
             config_path: Path to general.yaml or per-model config.
             force_preprocess: Force re-run preprocessing even if exists.
             dry_run: Show plan without executing.
+            resume: Resume models with a checkpoint; train new ones from scratch.
+            config_name: Filename to search for when config_path is a directory.
         """
         self.config_path = Path(config_path)
         self.force_preprocess = force_preprocess
         self.dry_run = dry_run
+        self.resume = resume
+        self.config_name = config_name
         self.jobs: List[Job] = []
         self.run_status = RunStatus()
         self.status_manager = StatusManager()
@@ -162,21 +169,34 @@ class JobRunner:
         print("Phase 1: Detecting config type...")
         config_paths = self._resolve_configs()
 
-        # Phase 2: Preprocess once
+        # Phase 2: Preprocess once per unique dataset (output_dir)
         print("\nPhase 2: Checking preprocessing...")
-        self._ensure_preprocessed(config_paths[0])
-
-        # Set up log directory
-        first_config = Config.from_yaml(config_paths[0])
-        self.log_dir = Path(first_config.output_dir) / "logs"
-        self.log_dir.mkdir(parents=True, exist_ok=True)
+        seen_output_dirs: set = set()
+        for path in config_paths:
+            cfg = Config.from_yaml(path)
+            if cfg.output_dir not in seen_output_dirs:
+                self._ensure_preprocessed(path)
+                seen_output_dirs.add(cfg.output_dir)
 
         # Phase 3: Create jobs
         print("\nPhase 3: Creating jobs...")
         for path in config_paths:
             config = Config.from_yaml(path)
-            log_file = self.log_dir / f"{config.model_name}.log"
-            job = Job(name=config.model_name, config_path=path, log_file=log_file)
+
+            # Per-job log directory (unique per dataset)
+            log_dir = Path(config.output_dir) / "logs"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            log_file = log_dir / f"{config.model_name}.log"
+
+            # Derive a unique job name from the output directory path so that
+            # datasets with the same name but different paths (e.g. liver/healthy
+            # vs liver/diseased) don't collide in the status dict.
+            # e.g. "outputs/liver_test/healthy" → "liver_test_healthy_mggp_svgp"
+            out_path = Path(config.output_dir)
+            unique_prefix = "_".join(out_path.parts[1:]) if len(out_path.parts) > 1 else out_path.name
+            job_name = f"{unique_prefix}_{config.model_name}"
+
+            job = Job(name=job_name, config_path=path, log_file=log_file, resume=self.resume)
             self.jobs.append(job)
             self.run_status.jobs[job.name] = {
                 "config_path": str(path),
@@ -185,8 +205,8 @@ class JobRunner:
 
             # Add train task to status manager
             self.status_manager.add_job(JobStatus(
-                name=f"{config.model_name}_train",
-                model=config.model_name,
+                name=f"{job_name}_train",
+                model=job_name,
                 task="train",
                 config_path=path,
                 device="pending",
@@ -197,14 +217,14 @@ class JobRunner:
 
             # Add analyze task to status manager
             self.status_manager.add_job(JobStatus(
-                name=f"{config.model_name}_analyze",
-                model=config.model_name,
+                name=f"{job_name}_analyze",
+                model=job_name,
                 task="analyze",
                 config_path=path,
                 device="pending",
                 status="pending",
                 log_file=log_file,
-                total_epochs=0,  # analyze doesn't have epochs in the same way
+                total_epochs=0,
             ))
 
         self.is_multiplex = len(self.jobs) > 1
@@ -226,7 +246,7 @@ class JobRunner:
     def _resolve_configs(self) -> List[Path]:
         """Resolve config paths to a list of per-model configs."""
         if self.config_path.is_dir():
-            general_configs = list(self.config_path.rglob("general.yaml"))
+            general_configs = list(self.config_path.rglob(self.config_name))
             if not general_configs:
                 raise ValueError(f"No general.yaml found in {self.config_path}")
 
@@ -269,10 +289,11 @@ class JobRunner:
 
     def _print_job_summary(self) -> None:
         """Print a table of jobs to be run."""
-        print(f"\n{'Model':<15} {'Status':<10}")
-        print("-" * 25)
+        col_w = max(15, max(len(j.name) for j in self.jobs) + 2) if self.jobs else 15
+        print(f"\n{'Model':<{col_w}} {'Status':<10}")
+        print("-" * (col_w + 12))
         for job in self.jobs:
-            print(f"{job.name:<15} {job.status:<10}")
+            print(f"{job.name:<{col_w}} {job.status:<10}")
 
     def _run_parallel(self) -> None:
         """Run training and analyze in parallel with GPU/CPU scheduling.
@@ -535,7 +556,10 @@ class JobRunner:
 
     def _launch_process(self, stages: List[str], job: Job, env: Dict[str, str], task: str = "train") -> Optional[subprocess.Popen]:
         """Launch a subprocess for given stages."""
-        cmd = [sys.executable, "-m", "spatial_factorization", "run"] + stages + ["-c", str(job.config_path)]
+        cmd = [sys.executable, "-m", "spatial_factorization", "run"] + stages
+        if task == "train" and job.resume:
+            cmd.append("--resume")
+        cmd += ["-c", str(job.config_path)]
 
         try:
             proc = subprocess.Popen(
@@ -610,11 +634,16 @@ class JobRunner:
         if not self.jobs:
             return
 
-        config = Config.from_yaml(self.jobs[0].config_path)
-        output_dir = Path(config.output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
+        # For directory-based runs, save alongside the config directory
+        # For single-dataset runs, save in the dataset output_dir
+        if self.config_path.is_dir():
+            status_dir = self.config_path
+        else:
+            config = Config.from_yaml(self.jobs[0].config_path)
+            status_dir = Path(config.output_dir)
+            status_dir.mkdir(parents=True, exist_ok=True)
 
-        status_path = output_dir / "run_status.json"
+        status_path = status_dir / "run_status.json"
         with open(status_path, "w") as f:
             json.dump(self.run_status.to_dict(), f, indent=2)
 

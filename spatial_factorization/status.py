@@ -89,10 +89,15 @@ class StatusManager:
             "skipped": "dim",
         }
 
-        # Sort by model name, then by task (train before analyze)
+        # Sort by status priority first (active jobs at top), then model/task
         def sort_key(job):
+            status_order = {
+                "training": 0, "analyzing": 0, "running": 0,
+                "pending": 1,
+                "completed": 2, "failed": 2, "skipped": 2,
+            }
             task_order = {"train": 0, "analyze": 1}
-            return (job.model, task_order.get(job.task, 99))
+            return (status_order.get(job.status, 1), job.model, task_order.get(job.task, 99))
 
         for job in sorted(self.jobs.values(), key=sort_key):
             style = status_styles.get(job.status, "")
