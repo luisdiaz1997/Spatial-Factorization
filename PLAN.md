@@ -1,168 +1,152 @@
-# Bug Fixes: Multi-Dataset Run Failures
+# Sherlock SLURM Integration Plan
 
-Findings from the first `run all -c configs/ --config-name general_test.yaml` run
-across all datasets. Five distinct bugs were identified.
+## Goal
 
----
+Submit one SLURM job per per-model config on Stanford Sherlock (~95 jobs total:
+19 `general.yaml` files × 5 models). Each job runs:
 
-## Bug 1 — Analyze OOM: SVGP forward pass on full N
-
-**Affected:** `merfish_svgp`, `colon_svgp`, `liver_svgp` (diseased)
-**Stage:** analyze
-
-**Root cause:** `analyze.py` calls `model.get_factors(Y, coordinates)` which runs the
-SVGP forward on all N points at once. This materializes an `(L, N, M)` or `(M, N)`
-tensor (and the full K(Z,X) kernel matrix) that exceeds GPU memory for large N:
-
-| Dataset | N | Error |
-|---------|---|-------|
-| merfish | 73 K | tried to allocate 9.88 GiB — `gp.py:376` `(W @ Lu) ** 2` |
-| colon | 120 K | tried to allocate 16.08 GiB — same line |
-| liver (diseased) | 310 K | tried to allocate 3.46 GiB — `kernels.py:53` vmap K(Z,X) |
-
-**Fix:** Chunk the `get_factors` / `_get_spatial_qF` call in `analyze.py` over N
-with a configurable `analyze_batch_size` (e.g., default 10 000). Concatenate
-factors and scales across chunks. The `y_batch_size` and model training batching
-are irrelevant here — this is inference-time memory.
-
----
-
-## Bug 2 — Analyze OOM: LCGP forward pass on full N
-
-**Affected:** `merfish_lcgp`, `colon_lcgp`
-**Stage:** analyze
-
-**Root cause:** LCGP `reshape_parameters` materializes `[L, N, K, K]` for `Su_knn`
-before the Cholesky decomposition:
-
-| Dataset | N | K | Shape | Error |
-|---------|---|---|-------|-------|
-| merfish | 73 K | 50 | [10, 73655, 50, 50] | 8.23 GiB — `gp.py:825` cholesky |
-| colon | 120 K | 50 | [10, 119906, 50, 50] | 13.40 GiB — `gp.py:821` Lu_knn @ Lu_knn.T |
-
-**Fix:** Same batching solution as Bug 1 — chunk N in the analyze forward pass.
-Both SVGP and LCGP paths use `get_factors`, so a single batching loop covers both.
-
----
-
-## Bug 3 — Train crash: MGGP_SVGP inducing allocation mismatch
-
-**Affected:** `colon_mggp_svgp`
-**Stage:** train
-
-**Root cause:** Colon has many small groups. The `inducing_allocation='derived'`
-method fails for 5 groups (`[2, 8, 38, 43, 48]`) and falls back to `'proportional'`,
-but the actual allocated inducing points (2796) is less than `num_inducing=3000`.
-This causes a shape mismatch in `transform_variables`:
-
-```
-RuntimeError: linalg.solve_triangular: Incompatible shapes of A and B
-(2796×2796 and 3000×36012)
+```bash
+spatial_factorization run all -c configs/<dataset>/svgp.yaml --resume
 ```
 
-The Cholesky `L` has shape `(2796, 2796)` but `stacked` is `(3000, 36012)`.
+The existing multiplexer handles the single-model pipeline (preprocess check →
+train → analyze → figures) within the job.
 
-**Applied patch (PNMF `models.py`):** After the `derived` allocation call, update
-`M = Z.shape[0]` so the rest of training uses the actual returned count. This stops
-the crash but does not fix the under-allocation itself.
+---
 
-**Root cause of the under-allocation (found in `gpzoo/model_utilities.py`
-`mggp_kmeans_inducing_points`, lines ~293–340):**
+## Files to Change
 
-When `derived` fails to assign any k-means centers to some groups (the "missing
-groups"), the fallback logic computes:
+| File | Action |
+|------|--------|
+| `spatial_factorization/runner.py` | Fix `query_gpus()` to respect `CUDA_VISIBLE_DEVICES` |
+| `scripts/submit_sherlock.py` | New: generate configs, preprocess locally, submit jobs |
+
+---
+
+## Fix 1 — `runner.py`: Respect `CUDA_VISIBLE_DEVICES` in `query_gpus()`
+
+`nvidia-smi` reports all GPUs on the node regardless of `CUDA_VISIBLE_DEVICES`.
+When SLURM allocates 1 GPU from a 4-GPU node, the runner would detect all 4 and
+try to use non-allocated ones — interfering with other users.
+
+Add to `query_gpus()` (line 42) after building the list from nvidia-smi:
 
 ```python
-target_per_group = (total_points - n_replace) * group_counts / total_available
+# Respect CUDA_VISIBLE_DEVICES if set (e.g., by SLURM)
+cuda_visible = os.environ.get("CUDA_VISIBLE_DEVICES", "")
+if cuda_visible and cuda_visible not in ("NoDevFiles", "-1"):
+    visible_ids = {int(x) for x in cuda_visible.split(",")}
+    gpus = [g for g in gpus if g.device_id in visible_ids]
 ```
 
-`group_counts` and `total_available` include **all** groups, even the missing ones.
-The missing groups have `derived_group_counts = 0` but a positive `target_per_group`,
-so they don't appear in `excess_mask`. Their "allocation" is silently subtracted from
-the budget of the non-missing groups, making those groups look like they have more
-excess than they do. The removal loop therefore strips out:
-
-```
-n_remove_total ≈ n_replace + floor(total_points * missing_fraction)
-```
-
-…but only `n_replace` points are added back. The deficit is roughly
-`floor(M * sum(missing_group_cells) / N)`. For colon with 5 missing groups
-this was 3000 − 2796 = 204.
-
-**Proper fix (to be done in GPzoo in a separate session):** Compute
-`target_per_group` only over the non-missing groups so their excess is calculated
-correctly, then allocate the full remaining budget among them. The missing groups
-get their points exclusively from the fallback k-means step.
+Local runs (no `CUDA_VISIBLE_DEVICES` set): behavior unchanged.
 
 ---
 
-## Bug 4 — Analyze crash: K not saved to checkpoint (LCGP/MGGP_LCGP)
+## Fix 2 — `scripts/submit_sherlock.py`
 
-**Affected:** `osmfish_mggp_lcgp`
-**Stage:** analyze
+### Workflow
 
-**Root cause:** `_load_model()` in `analyze.py` reconstructs the LCGP/MGGP_LCGP
-prior using a hardcoded or config-derived `K=50`, but the saved `model.pth` has
-`Lu` shaped `[10, 4839, 20]` (K=20, from a prior run with different config).
-The `state_dict` load then fails:
+1. **Discover** all `{config_name}` files recursively under the given path
+2. **Generate** per-model configs by running `spatial_factorization generate -c <general.yaml>`
+   for each general config (produces pnmf/svgp/mggp_svgp/lcgp/mggp_lcgp YAMLs)
+3. **Preprocess** all unique datasets locally on the login node (sequential, CPU-only,
+   fast) — avoids race condition if 5 model jobs for the same dataset all start and
+   simultaneously try to write `preprocessed/Y.npz`
+4. **Submit** one `sbatch` job per per-model config
+5. **Print** summary table: job name | config | time | mem | SLURM job ID
 
+### CLI
+
+```bash
+# Dry run — see all ~95 jobs with resource specs
+python scripts/submit_sherlock.py -c configs/ --dry-run
+
+# Submit test configs (10 epochs, fast)
+python scripts/submit_sherlock.py -c configs/ --config-name general_test.yaml \
+    --account <pi_account>
+
+# Full training run (resume from checkpoints if they exist)
+python scripts/submit_sherlock.py -c configs/ --account <pi_account> --resume
+
+# Single dataset
+python scripts/submit_sherlock.py -c configs/slideseq/general.yaml --account <pi_account>
 ```
-RuntimeError: size mismatch for Lu: copying a param with shape
-torch.Size([10, 4839, 20]) from checkpoint,
-the shape in current model is torch.Size([10, 4839, 50]).
+
+### Arguments
+
+| Arg | Default | Description |
+|-----|---------|-------------|
+| `-c/--config` | required | `general.yaml`, per-model YAML, or directory |
+| `--config-name` | `general.yaml` | Filename to search recursively in dirs |
+| `--account` | `None` | Sherlock SLURM account/PI group |
+| `--partition` | `gpu` | SLURM partition |
+| `--resume` | `False` | Pass `--resume` to each `run all` invocation |
+| `--dry-run` | `False` | Print job scripts without submitting |
+| `--conda-prefix` | `$HOME/miniconda3` | Path to conda installation |
+| `--env` | `factorization` | Conda environment name |
+| `--skip-preprocess` | `False` | Skip the local preprocessing step |
+
+### Resource table (first match wins on config path)
+
+| Pattern | Time | Mem | CPUs/GPU |
+|---------|------|-----|----------|
+| `colon` | 72:00:00 | 128G | 8 |
+| `liver/diseased` | 48:00:00 | 128G | 8 |
+| `liver` | 24:00:00 | 64G | 8 |
+| `merfish` | 24:00:00 | 64G | 8 |
+| `slideseq` | 24:00:00 | 64G | 8 |
+| `sdmbench` | 12:00:00 | 32G | 4 |
+| `tenxvisium` | 8:00:00 | 32G | 4 |
+| `osmfish` | 4:00:00 | 16G | 4 |
+| *(default)* | 24:00:00 | 64G | 8 |
+
+All jobs request **1 GPU** (one model = train → analyze → figures sequentially).
+
+### Generated job script (written to `{output_dir}/logs/sherlock_{model_name}.sh`)
+
+```bash
+#!/bin/bash
+#SBATCH --job-name={job_name}
+#SBATCH --partition={partition}
+#SBATCH --gpus=1
+#SBATCH --mem={mem_gb}G
+#SBATCH --cpus-per-gpu={cpus_per_gpu}
+#SBATCH --time={time_limit}
+#SBATCH --output={abs_output_dir}/logs/slurm_{model_name}_%j.log
+#SBATCH --error={abs_output_dir}/logs/slurm_{model_name}_%j.log
+# --account={account}   (uncommented only if --account provided)
+
+source {conda_prefix}/etc/profile.d/conda.sh
+conda activate {env_name}
+
+cd {repo_root}
+
+spatial_factorization run all -c {abs_config_path} [--resume]
 ```
 
-**Fix:**
-1. In `train.py` `_save_model()`, add `K` to the saved hyperparameters when
-   `config.local` is True.
-2. In `analyze.py` `_load_model()`, read `K` from `state["hyperparameters"]`
-   when reconstructing an LCGP or MGGP_LCGP prior.
+- All paths are absolute (relative paths break when SLURM cwd differs)
+- `repo_root` resolved at submission time via `Path(__file__).parent.parent`
+- Job name derived from config path, e.g. `sdmbench_151507_mggp_svgp`, `liver_healthy_lcgp`
+- SLURM logs sit alongside model logs in `{output_dir}/logs/`
 
 ---
 
-## Bug 5 — Runner job name collision: liver_healthy vs liver_diseased
+## Verification
 
-**Affected:** All liver jobs (healthy silently overwritten by diseased in status tracking)
-**Stage:** all
+```bash
+# 1. Test query_gpus fix (if GPUs available locally)
+conda run -n factorization python -c "
+import os; os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+from spatial_factorization.runner import query_gpus
+print([g.device_id for g in query_gpus()])  # should be [0]
+"
 
-**Root cause:** Both `configs/liver/healthy/general_test.yaml` and
-`configs/liver/diseased/general_test.yaml` have `dataset: liver`. When
-`generate_configs` runs on each, it sets `model_config.name = f"{config.dataset}_{variant['name']}"`,
-producing identical names (`liver_pnmf`, `liver_svgp`, etc.) for both.
+# 2. Dry run — verify ~95 jobs with correct names and resource specs
+python scripts/submit_sherlock.py -c configs/ --config-name general_test.yaml --dry-run
 
-In the runner:
-- `self.run_status.jobs[job.name]` is a dict → healthy entries overwritten by diseased
-- `StatusManager.jobs` is a dict keyed by `f"{config.name}_train"` → same collision
-
-The result: liver_healthy jobs run but their status is tracked under the diseased
-names, making the final status report incorrect and potentially causing GPU slot
-accounting bugs.
-
-**Fix:** Derive a unique job name from the output directory rather than from
-`config.name`. E.g., in Phase 3 of `runner.py`:
-
-```python
-# Use output_dir to derive a unique prefix (avoids dataset name collisions)
-out_path = Path(config.output_dir)
-# e.g. "outputs/liver_test/healthy" → "liver_test_healthy"
-unique_prefix = "_".join(out_path.parts[1:])  # skip "outputs/"
-job_name = f"{unique_prefix}_{config.model_name}"
+# 3. On Sherlock: submit one dataset as a smoke test
+python scripts/submit_sherlock.py -c configs/slideseq/general_test.yaml \
+    --account <pi_account>
+squeue -u $USER   # verify 5 jobs appear
 ```
-
-This is independent of `config.dataset` and guaranteed unique across all configs.
-
----
-
-## Summary Table
-
-| # | Bug | Datasets | Stage | Fix location |
-|---|-----|----------|-------|-------------|
-| 1 | SVGP analyze OOM (full N) | merfish, colon, liver_dis | analyze | `analyze.py` — batch `get_factors` over N |
-| 2 | LCGP analyze OOM (Su_knn) | merfish, colon | analyze | same fix as #1 |
-| 3 | MGGP_SVGP train crash (alloc mismatch) | colon | train | **Patched** in PNMF (`M = Z.shape[0]`); root cause in GPzoo `mggp_kmeans_inducing_points` — fix `target_per_group` to exclude missing groups |
-| 4 | LCGP/MGGP_LCGP K not saved | osmfish | analyze | `train.py` save K; `analyze.py` load K |
-| 5 | Liver job name collision | liver healthy+diseased | runner | `runner.py` — use output_dir for job name |
-
-Bugs 1+2 share the same fix (batched analyze). Bug 4 is a one-line save + one-line
-load. Bug 5 is a naming change in the runner. Bug 3 may require a GPzoo fix.
