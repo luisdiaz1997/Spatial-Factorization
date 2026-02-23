@@ -47,6 +47,6 @@ training:
   tol: 1e-4
   verbose: false
   device: gpu
-  batch_size: 3000
+  batch_size: 7000
   y_batch_size: 2000
   shuffle: true
