@@ -678,6 +678,13 @@ class JobRunner:
         if not self.jobs:
             return
 
+        # Any job still "pending" was never completed (interrupted or never started).
+        # Mark it as "failed" so --failed picks it up on the next run.
+        for job in self.jobs:
+            if self.run_status.jobs[job.name]["status"] == "pending":
+                self.run_status.jobs[job.name]["status"] = "failed"
+                self.run_status.jobs[job.name]["error"] = "interrupted"
+
         # For directory-based runs, save alongside the config directory
         # For single-dataset runs, save in the dataset output_dir
         if self.config_path.is_dir():
@@ -688,7 +695,22 @@ class JobRunner:
             status_dir.mkdir(parents=True, exist_ok=True)
 
         status_path = status_dir / "run_status.json"
+
+        # Merge with existing status so jobs from previous runs are preserved.
+        # Only the jobs from the current run are updated.
+        merged = self.run_status.to_dict()
+        if status_path.exists():
+            try:
+                with open(status_path) as f:
+                    prev = json.load(f)
+                # Start from previous jobs, then overlay current run's results
+                combined_jobs = prev.get("jobs", {})
+                combined_jobs.update(merged["jobs"])
+                merged["jobs"] = combined_jobs
+            except (json.JSONDecodeError, KeyError):
+                pass  # Corrupt file — just write fresh
+
         with open(status_path, "w") as f:
-            json.dump(self.run_status.to_dict(), f, indent=2)
+            json.dump(merged, f, indent=2)
 
         print(f"\nRun status saved to: {status_path}")
