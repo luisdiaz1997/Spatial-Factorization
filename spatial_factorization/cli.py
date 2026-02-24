@@ -80,7 +80,8 @@ def generate(config):
 @click.option("--dry-run", is_flag=True, help="Show plan without executing")
 @click.option("--resume", is_flag=True, help="Resume training: resumes models with a checkpoint, trains new ones from scratch")
 @click.option("--config-name", default="general.yaml", show_default=True, help="Config filename to search for when config is a directory (e.g. general_test.yaml)")
-def run_pipeline(stages, config, force, dry_run, resume, config_name):
+@click.option("--failed", "failed_only", is_flag=True, help="Re-run only jobs that failed in the previous run (reads run_status.json)")
+def run_pipeline(stages, config, force, dry_run, resume, config_name, failed_only):
     """Run pipeline stages sequentially, or run all models in parallel.
 
     \b
@@ -114,6 +115,9 @@ def run_pipeline(stages, config, force, dry_run, resume, config_name):
         # Resume training across all models (trains new ones from scratch)
         spatial_factorization run all -c configs/slideseq/general.yaml --resume
 
+        # Re-run only failed jobs from the previous run
+        spatial_factorization run all -c configs/ --failed
+
         # Dry run to see plan
         spatial_factorization run all -c configs/slideseq/general.yaml --dry-run
 
@@ -126,7 +130,7 @@ def run_pipeline(stages, config, force, dry_run, resume, config_name):
     if "all" in stages:
         from .runner import JobRunner
 
-        JobRunner(config, force_preprocess=force, dry_run=dry_run, resume=resume, config_name=config_name).run()
+        JobRunner(config, force_preprocess=force, dry_run=dry_run, resume=resume, config_name=config_name, failed_only=failed_only).run()
         return
 
     # Validate stages

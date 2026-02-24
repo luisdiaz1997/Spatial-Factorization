@@ -139,6 +139,7 @@ class JobRunner:
         dry_run: bool = False,
         resume: bool = False,
         config_name: str = "general.yaml",
+        failed_only: bool = False,
     ):
         """Initialize the job runner.
 
@@ -148,12 +149,14 @@ class JobRunner:
             dry_run: Show plan without executing.
             resume: Resume models with a checkpoint; train new ones from scratch.
             config_name: Filename to search for when config_path is a directory.
+            failed_only: Only re-run jobs that failed in the previous run_status.json.
         """
         self.config_path = Path(config_path)
         self.force_preprocess = force_preprocess
         self.dry_run = dry_run
         self.resume = resume
         self.config_name = config_name
+        self.failed_only = failed_only
         self.jobs: List[Job] = []
         self.run_status = RunStatus()
         self.status_manager = StatusManager()
@@ -168,6 +171,10 @@ class JobRunner:
         # Phase 1: Detect config type
         print("Phase 1: Detecting config type...")
         config_paths = self._resolve_configs()
+
+        if not config_paths:
+            print("\nNothing to run.")
+            return
 
         # Phase 2: Preprocess once per unique dataset (output_dir)
         print("\nPhase 2: Checking preprocessing...")
@@ -243,8 +250,45 @@ class JobRunner:
         self._print_final_report()
         self._save_status()
 
+    def _get_status_path(self) -> Path:
+        """Return the expected path to run_status.json for this run."""
+        if self.config_path.is_dir():
+            return self.config_path / "run_status.json"
+        # For general.yaml or per-model config, look in the dataset output_dir.
+        # Generate configs to find the first output_dir.
+        if Config.is_general_config(self.config_path):
+            from .generate import generate_configs
+            generated = generate_configs(self.config_path)
+            first_path = next(iter(generated.values()))
+        else:
+            first_path = self.config_path
+        cfg = Config.from_yaml(first_path)
+        return Path(cfg.output_dir) / "run_status.json"
+
     def _resolve_configs(self) -> List[Path]:
         """Resolve config paths to a list of per-model configs."""
+        if self.failed_only:
+            status_path = self._get_status_path()
+            if not status_path.exists():
+                raise ValueError(
+                    f"No run_status.json found at {status_path}. "
+                    "Run without --failed first to generate a status file."
+                )
+            with open(status_path) as f:
+                prev_status = json.load(f)
+            failed_configs = [
+                Path(v["config_path"])
+                for v in prev_status["jobs"].values()
+                if v["status"] == "failed"
+            ]
+            if not failed_configs:
+                print("No failed jobs found in run_status.json. Nothing to re-run.")
+                return []
+            print(f"Found {len(failed_configs)} failed job(s) to re-run:")
+            for p in failed_configs:
+                print(f"  {p}")
+            return failed_configs
+
         if self.config_path.is_dir():
             general_configs = list(self.config_path.rglob(self.config_name))
             if not general_configs:
