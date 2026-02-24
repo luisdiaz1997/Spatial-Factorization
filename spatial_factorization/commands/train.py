@@ -88,6 +88,19 @@ def _create_warm_start_pnmf(loaded_model, config: Config, pnmf_kwargs: dict):
     if config.spatial:
         loaded_prior = loaded_model._prior
 
+        # Replicate PNMF's parameter freezing that normally happens inside
+        # _create_spatial_prior (models.py lines 686-757). When loading from
+        # .pth, requires_grad flags are not preserved (state dicts save values
+        # only), so we must re-apply them here before the optimizer is built.
+        loaded_prior.Z.requires_grad_(False)
+        if hasattr(loaded_prior, 'groupsZ') and isinstance(loaded_prior.groupsZ, torch.nn.Parameter):
+            loaded_prior.groupsZ.requires_grad_(False)
+        loaded_prior.kernel.sigma.requires_grad_(False)
+        if not config.training.get("train_lengthscale", False):
+            loaded_prior.kernel.lengthscale.requires_grad_(False)
+        if hasattr(loaded_prior.kernel, 'group_diff_param'):
+            loaded_prior.kernel.group_diff_param.requires_grad_(False)
+
         class _WarmStartPNMF(PNMF):
             def _create_spatial_prior(self, Y, coordinates, groups):
                 return loaded_prior
