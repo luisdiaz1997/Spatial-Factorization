@@ -110,6 +110,15 @@ def find_best_match_for_factor(
 
 
 # ---------------------------------------------------------------------------
+# Point-size scaling
+# ---------------------------------------------------------------------------
+
+def _auto_point_size(N: int) -> float:
+    """Scale point size as 100/sqrt(N) — matches figures.py visual density."""
+    return 100.0 / np.sqrt(N)
+
+
+# ---------------------------------------------------------------------------
 # Subplot helpers
 # ---------------------------------------------------------------------------
 
@@ -197,7 +206,6 @@ def plot_comparison(
     name_b: str,
     n_pairs: int = 2,
     cmap: str = "plasma",
-    s_3d: float = 0.3,
     w_2d: float = 4.0,
     w_3d: float = 6.0,
     h_row: float = 4.5,
@@ -210,9 +218,10 @@ def plot_comparison(
     """
     from matplotlib.gridspec import GridSpec
 
-    _FIGURES_PY_S = 0.5
-    _FIGURES_PY_W = 3.0
-    s_2d = _FIGURES_PY_S * (w_2d / _FIGURES_PY_W) ** 2
+    N = len(coords)
+    base = _auto_point_size(N)
+    s_2d = base * (w_2d / 3.0) ** 2
+    s_3d = base * 0.6
 
     n_pairs = min(n_pairs, len(matches))
     col_widths = [w_2d, w_3d] * n_pairs
@@ -271,7 +280,6 @@ def plot_comparison_all(
     model_names: List[str],
     factor_indices: List[int],
     cmap: str = "plasma",
-    s_3d: float = 0.3,
     w_col: float = 3.5,   # inches per column
     h_2d: float = 4.0,    # inches for 2D row
     h_3d: float = 4.5,    # inches for 3D row
@@ -279,14 +287,18 @@ def plot_comparison_all(
     """Two-row figure: 2D spatial (top) and 3D surface (bottom) per model.
 
     Columns = one per model, all showing their matched factor.
+    Point sizes are scaled automatically via 100/sqrt(N).
     """
     from matplotlib.gridspec import GridSpec
 
-    n = len(model_names)
-    s_2d = 0.5 * (w_col / 3.0) ** 2   # scale point size with panel width
+    n_models = len(model_names)
+    N = len(coords)
+    base = _auto_point_size(N)
+    s_2d = base * (w_col / 3.0) ** 2
+    s_3d = base * 0.6   # 0.6 * (100/sqrt(41783)) ≈ 0.3 for slideseq
 
-    fig = plt.figure(figsize=(w_col * n, h_2d + h_3d + 0.6))
-    gs = GridSpec(2, n, figure=fig,
+    fig = plt.figure(figsize=(w_col * n_models, h_2d + h_3d + 0.6))
+    gs = GridSpec(2, n_models, figure=fig,
                   height_ratios=[h_2d, h_3d],
                   left=0.02, right=0.99, top=0.92, bottom=0.01,
                   wspace=0.05, hspace=0.06)

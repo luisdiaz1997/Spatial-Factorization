@@ -921,6 +921,11 @@ def plot_top_enriched_genes_per_group(
     return fig
 
 
+def _auto_point_size(N: int) -> float:
+    """Scale point size as 100 / sqrt(N) so visual density stays consistent."""
+    return 100.0 / np.sqrt(N)
+
+
 def run(config_path: str):
     """Generate publication figures.
 
@@ -969,13 +974,18 @@ def run(config_path: str):
     gene_names = data.gene_names
     group_names = data.group_names or [f"Group {i}" for i in range(data.n_groups)]
 
+    N = data.n_spots
+    s = _auto_point_size(N)
+    print(f"  Auto point size: s={s:.3f} (N={N})")
+
     # 1. Spatial factor plot
     if factors is not None:
         print("Generating spatial factor plot...")
         fig = plot_factors_spatial(
             factors, coords,
             moran_idx=moran_idx,
-            moran_values=moran_values
+            moran_values=moran_values,
+            s=s,
         )
         fig.savefig(figures_dir / "factors_spatial.png", dpi=150, bbox_inches="tight")
         plt.close(fig)
@@ -987,7 +997,8 @@ def run(config_path: str):
         fig = plot_scales_spatial(
             scales, coords,
             moran_idx=moran_idx,
-            moran_values=moran_values
+            moran_values=moran_values,
+            s=s,
         )
         fig.savefig(figures_dir / "scales_spatial.png", dpi=150, bbox_inches="tight")
         plt.close(fig)
@@ -1022,6 +1033,7 @@ def run(config_path: str):
         fig = plot_groups(
             coords, groups_np, group_names,
             Z=Z_celltype, groupsZ=groupsZ_celltype,
+            s_data=s,
         )
         plot_name = "points.png"
         print(f"Generating {plot_name}...")
@@ -1073,7 +1085,7 @@ def run(config_path: str):
 
         fig = plot_factors_with_top_genes(
             factors, Y, loadings, coords, gene_names,
-            moran_idx=moran_idx, n_genes=5
+            moran_idx=moran_idx, n_genes=5, s=s,
         )
         fig.savefig(figures_dir / "factors_with_genes.png", dpi=150, bbox_inches="tight")
         plt.close(fig)

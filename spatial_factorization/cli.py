@@ -96,10 +96,10 @@ def multianalyze(config, models, n_pairs, match_against, output):
 
     \b
     EXAMPLES:
-        spatial_factorization multianalyze -c configs/slideseq/general.yaml pnmf svgp
-        spatial_factorization multianalyze -c configs/slideseq/general.yaml pnmf svgp --n-pairs 3
+        spatial_factorization multianalyze -c configs/slideseq/general.yaml svgp mggp_svgp
+        spatial_factorization multianalyze -c configs/slideseq/general.yaml svgp mggp_svgp --n-pairs 3
         spatial_factorization multianalyze -c configs/slideseq/general.yaml \\
-            pnmf svgp mggp_svgp lcgp mggp_lcgp
+            svgp mggp_svgp pnmf lcgp mggp_lcgp
     """
     from .commands.multianalyze import run as _run
     _run(config, list(models), n_pairs=n_pairs, match_against=match_against, output_path=output)
