@@ -367,6 +367,11 @@ spatial_factorization train      -c configs/slideseq/svgp_test.yaml  # Model-spe
 spatial_factorization analyze    -c configs/slideseq/svgp_test.yaml
 spatial_factorization figures    -c configs/slideseq/svgp_test.yaml
 
+# Compare factors across two models (pairwise matching + 2D/3D comparison figure)
+spatial_factorization multianalyze -c configs/slideseq/general.yaml pnmf svgp
+spatial_factorization multianalyze -c configs/slideseq/general.yaml pnmf svgp --n-pairs 3
+spatial_factorization multianalyze -c configs/slideseq/general.yaml pnmf svgp -o my_figures/
+
 # Resume training from a checkpoint (appends to ELBO history; trains from scratch if no checkpoint)
 spatial_factorization train --resume -c configs/slideseq/svgp_test.yaml
 
@@ -559,6 +564,7 @@ This allows:
 | 8 | **DONE** | Datasets integration (7 loaders: slideseq, tenxvisium, sdmbench, liver, merfish, colon, osmfish; configs for all datasets including 12 SDMBench slides and healthy/diseased liver) |
 | 9 | **DONE** | Multi-dataset parallel runner (`run all -c configs/ --config-name general_test.yaml`; unique job names; per-dataset log dirs; preprocess once per output_dir) |
 | 10 | **DONE** | Robustness: auto-clamp num_inducing/batch_size/y_batch_size to data dims; batched GP forward pass in analyze (`analyze_batch_size`); factor reuse across metrics; K persisted in LCGP checkpoints |
+| 11 | **DONE** | `multianalyze` command: pairwise normalized L2 factor matching between two models, 2-row comparison figure (2D spatial + 3D surface per matched pair), distance heatmap. Saved to `output_dir/figures/`. |
 
 ## Relationship to Other Repos
 

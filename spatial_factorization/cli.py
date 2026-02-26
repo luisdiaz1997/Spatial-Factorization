@@ -73,6 +73,29 @@ def generate(config):
         click.echo(f"  {name}: {path}")
 
 
+@cli.command("multianalyze")
+@click.option("--config", "-c", required=True, type=click.Path(exists=True),
+              help="Path to any config YAML for the dataset (used to resolve output_dir)")
+@click.argument("models", nargs=-1, required=True)
+@click.option("--n-pairs", default=2, show_default=True,
+              help="Number of best-matched factor pairs to show")
+@click.option("--output", "-o", default=None,
+              help="Output directory (default: output_dir/figures/)")
+def multianalyze(config, models, n_pairs, output):
+    """Compare and match factors between two trained models.
+
+    \b
+    MODELS: exactly two model names, e.g. pnmf svgp
+
+    \b
+    EXAMPLES:
+        spatial_factorization multianalyze -c configs/slideseq/general.yaml pnmf svgp
+        spatial_factorization multianalyze -c configs/slideseq/general.yaml pnmf svgp --n-pairs 3
+    """
+    from .commands.multianalyze import run as _run
+    _run(config, list(models), n_pairs=n_pairs, output_path=output)
+
+
 @cli.command("run")
 @click.argument("stages", nargs=-1, required=True)
 @click.option("--config", "-c", required=True, type=click.Path(exists=True), help="Path to config YAML or directory")
