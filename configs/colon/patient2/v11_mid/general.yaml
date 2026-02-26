@@ -1,0 +1,49 @@
+# Patient 2 (cellpose + scanpy ingest) with v11_mid labels
+# N=785,725 cells × D=500 genes; coords in obsm["spatial"]
+# Use: spatial_factorization generate -c configs/colon/patient2/v11_mid/general.yaml
+# Use: spatial_factorization run all -c configs/colon/patient2/v11_mid/general.yaml
+
+name: colon_patient2_v11_mid
+seed: 67
+dataset: colon
+output_dir: outputs/colon/patient2/v11_mid
+
+preprocessing:
+  spatial_scale: 50.0
+  h5ad_path: /gladstone/engelhardt/lab/lchumpitaz/datasets/colon/patient2_v11.h5ad
+  labels_path: ~  # None: read groups from adata.obs[group_column]
+  group_column: v11_mid
+  subsample: ~  # no subsampling
+  min_group_fraction: 0.01
+
+model:
+  n_components: 10
+  mode: expanded
+  loadings_mode: multiplicative
+  training_mode: standard
+  E: 3
+
+  kernel: Matern32
+  num_inducing: 3000
+  lengthscale: 8.0
+  sigma: 1.0
+  train_lengthscale: false
+  cholesky_mode: exp
+  diagonal_only: false
+
+  K: 50
+  precompute_knn: true
+
+  group_diff_param: 1.0
+  inducing_allocation: derived
+
+training:
+  max_iter: 20000
+  learning_rate: 2e-3
+  optimizer: Adam
+  tol: 1e-4
+  verbose: false
+  device: gpu
+  batch_size: 7000
+  y_batch_size: 2000
+  shuffle: true

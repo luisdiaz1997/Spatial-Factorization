@@ -1,0 +1,53 @@
+# Patient 1 (sisi_ingest) with v11_top (clTopLevel) labels
+# N=844,468 cells × D=211 genes; coords in obs["center_x"], obs["center_y"]
+# Use: spatial_factorization generate -c configs/colon/patient1/v11_top/general.yaml
+# Use: spatial_factorization run all -c configs/colon/patient1/v11_top/general.yaml
+
+name: colon_patient1_v11_top
+seed: 67
+dataset: colon
+output_dir: outputs/colon/patient1/v11_top
+
+preprocessing:
+  spatial_scale: 50.0
+  h5ad_path: /gladstone/engelhardt/lab/lchumpitaz/datasets/colon/patient1_v11.h5ad
+  labels_path: ~  # None: read groups from adata.obs[group_column]
+  group_column: v11_top
+  subsample: ~  # no subsampling
+  min_group_fraction: 0.01
+
+model:
+  # Common params
+  n_components: 10
+  mode: expanded
+  loadings_mode: multiplicative
+  training_mode: standard
+  E: 3
+
+  # Spatial GP params (svgp/mggp_svgp only)
+  kernel: Matern32
+  num_inducing: 3000
+  lengthscale: 8.0
+  sigma: 1.0
+  train_lengthscale: false
+  cholesky_mode: exp
+  diagonal_only: false
+
+  # LCGP params (lcgp/mggp_lcgp only)
+  K: 50
+  precompute_knn: true
+
+  # MGGP params
+  group_diff_param: 1.0
+  inducing_allocation: derived
+
+training:
+  max_iter: 20000
+  learning_rate: 2e-3
+  optimizer: Adam
+  tol: 1e-4
+  verbose: false
+  device: gpu
+  batch_size: 7000
+  y_batch_size: 211
+  shuffle: true

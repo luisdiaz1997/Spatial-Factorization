@@ -1,0 +1,47 @@
+# TEST config — Patient 1 v11_top (10 epochs)
+# Use: spatial_factorization run all -c configs/colon/patient1/v11_top/general_test.yaml
+
+name: colon_patient1_v11_top_test
+seed: 67
+dataset: colon
+output_dir: outputs/colon_test/patient1/v11_top
+
+preprocessing:
+  spatial_scale: 50.0
+  h5ad_path: /gladstone/engelhardt/lab/lchumpitaz/datasets/colon/patient1_v11.h5ad
+  labels_path: ~  # None: read groups from adata.obs[group_column]
+  group_column: v11_top
+  subsample: ~
+  min_group_fraction: 0.01
+
+model:
+  n_components: 10
+  mode: expanded
+  loadings_mode: multiplicative
+  training_mode: standard
+  E: 3
+
+  kernel: Matern32
+  num_inducing: 3000
+  lengthscale: 8.0
+  sigma: 1.0
+  train_lengthscale: false
+  cholesky_mode: exp
+  diagonal_only: false
+
+  K: 50
+  precompute_knn: true
+
+  group_diff_param: 1.0
+  inducing_allocation: derived
+
+training:
+  max_iter: 10
+  learning_rate: 2e-3
+  optimizer: Adam
+  tol: 1e-4
+  verbose: false
+  device: gpu
+  batch_size: 7000
+  y_batch_size: 211
+  shuffle: true

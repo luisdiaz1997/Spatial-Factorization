@@ -13,11 +13,16 @@ class ColonLoader(DatasetLoader):
     """Loader for Colon Cancer Vizgen MERFISH dataset.
 
     N=1,199,060 cells × D=492 genes.
-    Groups come from an external CSV (cl46v1SubShort_ds column).
-    Coordinates: obsm["spatial"] as pandas DataFrame (must sort by index).
+    Groups can come from an external CSV or directly from adata.obs.
+    Coordinates: obsm["spatial"] as pandas DataFrame, or obs["center_x"]/["center_y"].
     Expression: adata.X (no .raw).
 
     Full dataset: 1.2M cells. Use subsample param (int step) to downsample if needed.
+
+    When labels_path is None (or omitted), groups are read from adata.obs[group_column].
+    Coordinate detection:
+      - If obs["center_x"] exists → use obs["center_x"], obs["center_y"] (Patient 1 sisi format)
+      - Otherwise → use obsm["spatial"] with DataFrame-sort logic
     """
 
     DEFAULTS = {
@@ -43,8 +48,8 @@ class ColonLoader(DatasetLoader):
         preprocessing : dict
             - spatial_scale: float (default 50.0)
             - h5ad_path: str, path to h5ad file
-            - labels_path: str, path to labels CSV
-            - group_column: str, column in labels CSV for cell types
+            - labels_path: str or None, path to labels CSV (None = read from adata.obs)
+            - group_column: str, column in labels CSV or adata.obs for cell types
             - subsample: int or None, step for subsampling (None = no subsampling)
         """
         params = {**self.DEFAULTS, **preprocessing}
@@ -58,16 +63,27 @@ class ColonLoader(DatasetLoader):
             ) from e
 
         adata = ad.read_h5ad(params["h5ad_path"])
-        labels_df = pd.read_csv(params["labels_path"], index_col=0)
 
-        # obsm["spatial"] is a DataFrame — sort cells by index
-        spatial = adata.obsm["spatial"]
-        if hasattr(spatial, "index"):
-            order = spatial.index.argsort()
-            X_raw = np.asarray(spatial.values, dtype=np.float32)[order]
+        # --- Coordinate extraction ---
+        if "center_x" in adata.obs.columns:
+            # Patient 1 sisi_ingest format: coords in obs columns
+            X_raw = np.stack(
+                [
+                    adata.obs["center_x"].to_numpy(dtype=np.float32),
+                    adata.obs["center_y"].to_numpy(dtype=np.float32),
+                ],
+                axis=1,
+            )
+            order = np.arange(len(adata))
         else:
-            order = np.arange(len(spatial))
-            X_raw = np.asarray(spatial, dtype=np.float32)[order]
+            # obsm["spatial"] may be a DataFrame — sort cells by index
+            spatial = adata.obsm["spatial"]
+            if hasattr(spatial, "index"):
+                order = spatial.index.argsort()
+                X_raw = np.asarray(spatial.values, dtype=np.float32)[order]
+            else:
+                order = np.arange(len(spatial))
+                X_raw = np.asarray(spatial, dtype=np.float32)[order]
 
         # Expression: adata.X (no .raw)
         Y_matrix = adata.X[order]
@@ -75,9 +91,18 @@ class ColonLoader(DatasetLoader):
             Y_matrix = Y_matrix.toarray()
         Y_np = np.asarray(Y_matrix, dtype=np.float32)  # (N, D)
 
-        # Groups from external CSV (already aligned with sorted order)
+        # --- Groups ---
         group_col = params["group_column"]
-        groups_series = labels_df[group_col]
+        labels_path = params.get("labels_path")
+
+        if labels_path is None:
+            # Inline labels: read directly from adata.obs (already aligned with order)
+            groups_series = adata.obs[group_col].iloc[order].reset_index(drop=True)
+        else:
+            # External CSV (already aligned with sorted order)
+            import pandas as pd  # noqa: F811 — may already be imported above
+            labels_df = pd.read_csv(labels_path, index_col=0)
+            groups_series = labels_df[group_col]
 
         # Apply subsampling if requested
         subsample = params.get("subsample")
