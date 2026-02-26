@@ -367,10 +367,17 @@ spatial_factorization train      -c configs/slideseq/svgp_test.yaml  # Model-spe
 spatial_factorization analyze    -c configs/slideseq/svgp_test.yaml
 spatial_factorization figures    -c configs/slideseq/svgp_test.yaml
 
-# Compare factors across two models (pairwise matching + 2D/3D comparison figure)
-spatial_factorization multianalyze -c configs/slideseq/general.yaml pnmf svgp
-spatial_factorization multianalyze -c configs/slideseq/general.yaml pnmf svgp --n-pairs 3
-spatial_factorization multianalyze -c configs/slideseq/general.yaml pnmf svgp -o my_figures/
+# Compare factors: 2 models — pairwise greedy matching, [2D|3D] side-by-side per pair
+spatial_factorization multianalyze -c configs/slideseq/general.yaml svgp mggp_svgp
+spatial_factorization multianalyze -c configs/slideseq/general.yaml svgp mggp_svgp --n-pairs 3
+
+# Compare factors: 3+ models — reference factor from model[0] vs model[1] (or --match-against),
+# then match that factor against all remaining models; plot 2D (top) / 3D (bottom) per model column.
+# svgp is the natural reference (spatial); pnmf should not be used as reference (non-spatial).
+spatial_factorization multianalyze -c configs/slideseq/general.yaml \
+    svgp mggp_svgp pnmf lcgp mggp_lcgp
+spatial_factorization multianalyze -c configs/slideseq/general.yaml \
+    svgp pnmf mggp_svgp lcgp mggp_lcgp --match-against mggp_svgp
 
 # Resume training from a checkpoint (appends to ELBO history; trains from scratch if no checkpoint)
 spatial_factorization train --resume -c configs/slideseq/svgp_test.yaml
@@ -564,7 +571,7 @@ This allows:
 | 8 | **DONE** | Datasets integration (7 loaders: slideseq, tenxvisium, sdmbench, liver, merfish, colon, osmfish; configs for all datasets including 12 SDMBench slides and healthy/diseased liver) |
 | 9 | **DONE** | Multi-dataset parallel runner (`run all -c configs/ --config-name general_test.yaml`; unique job names; per-dataset log dirs; preprocess once per output_dir) |
 | 10 | **DONE** | Robustness: auto-clamp num_inducing/batch_size/y_batch_size to data dims; batched GP forward pass in analyze (`analyze_batch_size`); factor reuse across metrics; K persisted in LCGP checkpoints |
-| 11 | **DONE** | `multianalyze` command: pairwise normalized L2 factor matching between two models, 2-row comparison figure (2D spatial + 3D surface per matched pair), distance heatmap. Saved to `output_dir/figures/`. |
+| 11 | **DONE** | `multianalyze` command: (a) 2-model mode — greedy pairwise normalized L2 matching, `--n-pairs` matched pairs shown as [2D\|3D] per pair; (b) 3+-model mode — single reference factor found between model[0] and model[1] (or `--match-against`), matched against all remaining models, plotted as 2D top / 3D bottom row. svgp is the natural reference; pnmf should not be used as reference (non-spatial). |
 
 ## Relationship to Other Repos
 

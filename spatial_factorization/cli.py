@@ -78,22 +78,31 @@ def generate(config):
               help="Path to any config YAML for the dataset (used to resolve output_dir)")
 @click.argument("models", nargs=-1, required=True)
 @click.option("--n-pairs", default=2, show_default=True,
-              help="Number of best-matched factor pairs to show")
+              help="Number of matched pairs to show (only used when exactly 2 models given)")
+@click.option("--match-against", default=None,
+              help="Model to use for the initial reference matching (3+ model case; default: second model)")
 @click.option("--output", "-o", default=None,
               help="Output directory (default: output_dir/figures/)")
-def multianalyze(config, models, n_pairs, output):
-    """Compare and match factors between two trained models.
+def multianalyze(config, models, n_pairs, match_against, output):
+    """Compare matched factors across trained models.
 
     \b
-    MODELS: exactly two model names, e.g. pnmf svgp
+    With 2 models: finds top --n-pairs matched factor pairs and shows each pair
+    as [2D | 3D] side by side, model A on row 0 and model B on row 1.
+
+    With 3+ models: finds the single best match between model 0 (reference) and
+    model 1, then matches that factor against all remaining models. Plots all
+    models side by side with 2D on the top row and 3D on the bottom row.
 
     \b
     EXAMPLES:
         spatial_factorization multianalyze -c configs/slideseq/general.yaml pnmf svgp
         spatial_factorization multianalyze -c configs/slideseq/general.yaml pnmf svgp --n-pairs 3
+        spatial_factorization multianalyze -c configs/slideseq/general.yaml \\
+            pnmf svgp mggp_svgp lcgp mggp_lcgp
     """
     from .commands.multianalyze import run as _run
-    _run(config, list(models), n_pairs=n_pairs, output_path=output)
+    _run(config, list(models), n_pairs=n_pairs, match_against=match_against, output_path=output)
 
 
 @cli.command("run")
