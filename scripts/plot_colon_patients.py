@@ -29,20 +29,24 @@ os.makedirs(OUT_DIR, exist_ok=True)
 
 DATASETS = [
     {
-        "path": "/gladstone/engelhardt/lab/lchumpitaz/datasets/colon/patient1_v11.h5ad",
-        "label": "Patient 1 (2022 Pelka ingest)",
+        "path": "/gladstone/engelhardt/lab/lchumpitaz/datasets/colon/patient1_v11_full.h5ad",
+        "label": "Patient 1 (full cellpose, 500 genes)",
         "tag": "patient1",
-        "coord": "obs",   # obs["center_x"], obs["center_y"]
+        "coord": "obsm",  # obsm["spatial"]
     },
     {
-        "path": "/gladstone/engelhardt/lab/lchumpitaz/datasets/colon/patient2_v11.h5ad",
-        "label": "Patient 2 (scanpy ingest)",
+        "path": "/gladstone/engelhardt/lab/lchumpitaz/datasets/colon/patient2_v11_full.h5ad",
+        "label": "Patient 2 (full cellpose, 500 genes)",
         "tag": "patient2",
         "coord": "obsm",  # obsm["spatial"]
     },
 ]
 
 LEVELS = ["v11_top", "v11_mid"]
+
+
+# Divergent colors for the top 4 most abundant cell types (ColorBrewer Set1)
+TOP4_COLORS = ["#e41a1c", "#377eb8", "#4daf4a", "#ff7f00"]  # red, blue, green, orange
 
 
 def make_colors(n_groups: int) -> list:
@@ -54,6 +58,29 @@ def make_colors(n_groups: int) -> list:
     else:
         cmap = plt.cm.gist_ncar
     return [cmap(i / max(n_groups - 1, 1)) for i in range(n_groups)]
+
+
+def build_color_map(loaded, level):
+    """Build a color map keyed by cell-type name.
+
+    Top 4 most abundant (across all loaded datasets) get divergent colors.
+    Remaining types get tab10/tab20 colors.
+    """
+    from collections import Counter
+    counts: Counter = Counter()
+    for _, adata in loaded:
+        if level not in adata.obs.columns:
+            continue
+        counts.update(adata.obs[level].value_counts().to_dict())
+
+    top4 = [c for c, _ in counts.most_common(4)]
+    all_cats = sorted(counts.keys())
+    rest = [c for c in all_cats if c not in top4]
+
+    colors_rest = make_colors(len(rest)) if rest else []
+    color_map = {c: TOP4_COLORS[i] for i, c in enumerate(top4)}
+    color_map.update({c: colors_rest[i] for i, c in enumerate(rest)})
+    return color_map
 
 
 def get_coords(adata, coord_type: str) -> np.ndarray:
@@ -89,12 +116,11 @@ def _draw_groups(ax, coords, groups_int, colors,
     ax.set_facecolor("gray")
 
 
-def plot_individual(adata, label, tag, coord_type, level):
+def plot_individual(adata, label, tag, coord_type, level, color_map):
     groups_cat = adata.obs[level].astype("category")
     group_names = list(groups_cat.cat.categories)
     groups_int = groups_cat.cat.codes.to_numpy()
-    n_groups = len(group_names)
-    colors = make_colors(n_groups)
+    colors = [color_map[g] for g in group_names]
     coords = get_coords(adata, coord_type)
 
     fig, ax = plt.subplots(figsize=(14, 6))
@@ -116,20 +142,9 @@ def plot_individual(adata, label, tag, coord_type, level):
     print(f"  Saved {out}")
 
 
-def plot_comparison(loaded, level):
+def plot_comparison(loaded, level, color_map):
     """Two-panel side-by-side with a shared color map keyed by cell-type name."""
-    # Build union of categories (same order = same color across both patients)
-    all_cats: list = []
-    seen: set = set()
-    for _, adata in loaded:
-        for c in adata.obs[level].astype("category").cat.categories:
-            if c not in seen:
-                all_cats.append(c)
-                seen.add(c)
-
-    n_cats = len(all_cats)
-    colors_list = make_colors(n_cats)
-    color_map = {c: colors_list[i] for i, c in enumerate(all_cats)}
+    all_cats = sorted(color_map.keys())
 
     fig, axes = plt.subplots(1, 2, figsize=(26, 6))
     fig.subplots_adjust(wspace=0.04, right=0.82)
@@ -174,6 +189,9 @@ for ds in DATASETS:
     print(f"  {adata.n_obs:,} cells × {adata.n_vars:,} genes")
     loaded.append((ds, adata))
 
+# ── Build global color maps (top 4 get divergent colors, rest get tab colors) ──
+COLOR_MAPS: dict = {level: build_color_map(loaded, level) for level in LEVELS}
+
 # ── Individual plots ───────────────────────────────────────────────────────────
 for ds, adata in loaded:
     for level in LEVELS:
@@ -181,13 +199,13 @@ for ds, adata in loaded:
             print(f"  Skipping {level}: column not found")
             continue
         print(f"  {ds['tag']} {level} ...", flush=True)
-        plot_individual(adata, ds["label"], ds["tag"], ds["coord"], level)
+        plot_individual(adata, ds["label"], ds["tag"], ds["coord"], level, COLOR_MAPS[level])
 
 # ── Comparison plots ───────────────────────────────────────────────────────────
 if len(loaded) == 2:
     for level in LEVELS:
         if all(level in adata.obs.columns for _, adata in loaded):
             print(f"  comparison {level} ...", flush=True)
-            plot_comparison(loaded, level)
+            plot_comparison(loaded, level, COLOR_MAPS[level])
 
 print("\nDone.")
