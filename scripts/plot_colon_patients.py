@@ -22,6 +22,10 @@ import anndata as ad
 import matplotlib.pyplot as plt
 import numpy as np
 
+PLOT_H = 7.0      # inches: height of the tissue panel
+LEGEND_W = 2.5    # inches: width reserved for legend
+GAP_W = 0.2       # inches: gap between panels in comparison plots
+
 OUT_DIR = os.path.join(
     os.path.dirname(__file__), "..", "notebooks", "colon_exploration"
 )
@@ -98,10 +102,13 @@ def get_coords(adata, coord_type: str) -> np.ndarray:
 
 
 def _draw_groups(ax, coords, groups_int, colors,
-                 group_names, s=0.3, alpha=0.8):
-    """Per-group scatter loop exactly as in figures.py plot_groups."""
+                 group_names, s=None, alpha=0.8):
+    if s is None:
+        s = 20.0 / np.sqrt(len(coords))
+    """Per-group scatter loop: most abundant first (background), rare last (foreground)."""
     n_groups = len(group_names)
-    for g in range(n_groups):
+    draw_order = sorted(range(n_groups), key=lambda g: -(groups_int == g).sum())
+    for g in draw_order:
         mask = groups_int == g
         if not mask.any():
             continue
@@ -123,8 +130,16 @@ def plot_individual(adata, label, tag, coord_type, level, color_map):
     colors = [color_map[g] for g in group_names]
     coords = get_coords(adata, coord_type)
 
-    fig, ax = plt.subplots(figsize=(14, 6))
-    _draw_groups(ax, coords, groups_int, colors, group_names)
+    x_range = coords[:, 0].max() - coords[:, 0].min()
+    y_range = coords[:, 1].max() - coords[:, 1].min()
+    plot_w = PLOT_H * (x_range / y_range)
+    fig_w = plot_w + LEGEND_W
+
+    s = 20.0 / np.sqrt(len(coords))
+
+    fig = plt.figure(figsize=(fig_w, PLOT_H))
+    ax = fig.add_axes([0, 0, plot_w / fig_w, 1.0])
+    _draw_groups(ax, coords, groups_int, colors, group_names, s=s)
     ax.set_title(f"{level} | {label}", fontsize=12)
 
     handles, labels = ax.get_legend_handles_labels()
@@ -132,9 +147,8 @@ def plot_individual(adata, label, tag, coord_type, level, color_map):
         handles, labels,
         loc="center right", bbox_to_anchor=(1.0, 0.5),
         fontsize=8, title="Cell Type", title_fontsize=10,
-        markerscale=5, frameon=True,
+        markerscale=8 / np.sqrt(s), frameon=True,
     )
-    fig.subplots_adjust(right=0.78)
 
     out = os.path.join(OUT_DIR, f"{tag}_{level}.png")
     fig.savefig(out, dpi=150, bbox_inches="tight")
@@ -146,15 +160,24 @@ def plot_comparison(loaded, level, color_map):
     """Two-panel side-by-side with a shared color map keyed by cell-type name."""
     all_cats = sorted(color_map.keys())
 
-    fig, axes = plt.subplots(1, 2, figsize=(26, 6))
-    fig.subplots_adjust(wspace=0.04, right=0.82)
+    # Compute per-panel aspect ratios from actual coordinate ranges
+    coords_list = [get_coords(adata, ds["coord"]) for ds, adata in loaded]
+    panel_widths = [
+        PLOT_H * (c[:, 0].max() - c[:, 0].min()) / (c[:, 1].max() - c[:, 1].min())
+        for c in coords_list
+    ]
+    w1, w2 = panel_widths
+    fig_w = w1 + GAP_W + w2 + LEGEND_W
 
-    for ax, (ds, adata) in zip(axes, loaded):
+    fig = plt.figure(figsize=(fig_w, PLOT_H))
+    ax1 = fig.add_axes([0 / fig_w,              0, w1 / fig_w, 1.0])
+    ax2 = fig.add_axes([(w1 + GAP_W) / fig_w,  0, w2 / fig_w, 1.0])
+
+    for ax, (ds, adata), coords in zip([ax1, ax2], loaded, coords_list):
         groups_cat = adata.obs[level].astype("category")
         local_cats = list(groups_cat.cat.categories)
         groups_int = groups_cat.cat.codes.to_numpy()
         local_colors = [color_map[c] for c in local_cats]
-        coords = get_coords(adata, ds["coord"])
         _draw_groups(ax, coords, groups_int, local_colors, local_cats)
         ax.set_title(ds["label"], fontsize=11)
 
