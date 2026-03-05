@@ -561,6 +561,48 @@ def _compute_gene_enrichment(
     return results
 
 
+def _get_groupwise_factors_batched(
+    model, coords: np.ndarray, n_groups: int,
+    sort_order: np.ndarray, batch_size: int = 10000,
+) -> dict:
+    """Compute conditional posterior factors for MGGP models.
+
+    For each group g in {0, ..., n_groups-1}, runs the GP forward pass with
+    all cells forced to group g (groupsX_g = full(g)), giving the posterior
+    factor map under the kernel conditioned on that cell type.
+
+    Args:
+        model:      Fitted PNMF model with MGGP prior
+        coords:     (N, 2) spatial coordinates
+        n_groups:   Number of groups G
+        sort_order: Moran's I sort indices (applied to factor columns)
+        batch_size: Batch size for GP forward pass
+
+    Returns:
+        dict {g: (N, L) float32 array} — exp-space posterior means, Moran's I sorted
+    """
+    from PNMF.transforms import _get_spatial_qF
+
+    N = coords.shape[0]
+    result = {}
+
+    for g in range(n_groups):
+        print(f"  Group {g + 1}/{n_groups}...", end="\r", flush=True)
+        all_means = []
+        for start in range(0, N, batch_size):
+            end = min(start + batch_size, N)
+            coords_b = coords[start:end]
+            groups_b = np.full(end - start, g, dtype=np.int64)
+            qF = _get_spatial_qF(model, coordinates=coords_b, groups=groups_b)
+            all_means.append(torch.exp(qF.mean.detach().cpu()).T)  # (chunk, L)
+        factors_g = torch.cat(all_means, dim=0).numpy()  # (N, L)
+        factors_g = factors_g[:, sort_order]             # apply Moran's I sort
+        result[g] = factors_g.astype(np.float32)
+
+    print()  # newline after \r progress
+    return result
+
+
 def _compute_moran_i(factors: np.ndarray, coords: np.ndarray) -> tuple:
     """Compute Moran's I for each factor using squidpy.
 
@@ -712,6 +754,18 @@ def run(config_path: str):
             np.save(model_dir / "groupsZ.npy", groupsZ.detach().cpu().numpy())
             msg += f", groupsZ {tuple(groupsZ.shape)}"
         print(msg)
+
+    # Compute and save groupwise conditional posterior (MGGP models only)
+    if config.groups and spatial:
+        print(f"\nComputing groupwise conditional posterior ({data.n_groups} groups)...")
+        groupwise_dir = model_dir / "groupwise_factors"
+        groupwise_dir.mkdir(exist_ok=True)
+        groupwise = _get_groupwise_factors_batched(
+            model, coords, data.n_groups, sort_order, analyze_batch_size
+        )
+        for g, factors_g in groupwise.items():
+            np.save(groupwise_dir / f"group_{g}.npy", factors_g)
+        print(f"  Saved {data.n_groups} groupwise factor arrays to {groupwise_dir}/")
 
     # Save group-specific loadings and compute gene enrichment
     gene_enrichment = None

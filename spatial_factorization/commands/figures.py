@@ -80,6 +80,17 @@ def _load_analysis_results(model_dir: Path) -> dict:
         with open(enrichment_path) as f:
             results["gene_enrichment"] = json.load(f)
 
+    # Load groupwise conditional posterior factors (MGGP models)
+    groupwise_dir = model_dir / "groupwise_factors"
+    if groupwise_dir.exists():
+        gw = {}
+        for p in sorted(groupwise_dir.glob("group_*.npy"),
+                        key=lambda p: int(p.stem.split("_")[1])):
+            g = int(p.stem.split("_")[1])
+            gw[g] = np.load(p)  # (N, L)
+        if gw:
+            results["groupwise_factors"] = gw
+
     # Load Lu data (SVGP: Lu.pt, LCGP: Lu.npy)
     lu_pt_path = model_dir / "Lu.pt"
     lu_npy_path = model_dir / "Lu.npy"
@@ -921,6 +932,269 @@ def plot_top_enriched_genes_per_group(
     return fig
 
 
+def _draw_group_loc_panel(
+    ax, coords: np.ndarray, groups: np.ndarray, g: int,
+    s: float = 0.5, alpha: float = 0.9, cmap: str = "gray",
+) -> None:
+    """Scatter all cells with group g highlighted (1.0), others dimmed (0.0).
+
+    Single scatter call with a binary value array and grayscale colormap,
+    matching the notebook pattern.
+    """
+    values = np.where(groups == g, 1.0, 0.0)
+    ax.scatter(
+        coords[:, 0], coords[:, 1],
+        c=values, vmin=0.0, vmax=1.0,
+        cmap=cmap, s=s, alpha=alpha,
+        edgecolors="none", rasterized=True,
+    )
+    ax.invert_yaxis()
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_facecolor("gray")
+
+
+def _draw_factor_3d_shared(
+    ax, coords: np.ndarray, values: np.ndarray,
+    vmin: float, vmax: float, z_floor: float, z_ceil: float,
+    cmap: str = "turbo", s: float = 0.3, alpha: float = 0.9,
+    elev: float = 25.0, azim: float = -90.0,
+) -> None:
+    """3D surface scatter with externally supplied color scale and z-limits."""
+    x1, x2 = coords[:, 0], coords[:, 1]
+
+    transparent = (1.0, 1.0, 1.0, 0.0)
+    ax.xaxis.set_pane_color(transparent)
+    ax.yaxis.set_pane_color(transparent)
+    ax.zaxis.set_pane_color(transparent)
+    ax.xaxis.line.set_color(transparent)
+    ax.yaxis.line.set_color(transparent)
+    ax.zaxis.line.set_color(transparent)
+    for axis in [ax.xaxis, ax.yaxis, ax.zaxis]:
+        axis.set_ticklabels([])
+        axis._axinfo["tick"]["inward_factor"] = 0.0
+        axis._axinfo["tick"]["outward_factor"] = 0.0
+        axis._axinfo["grid"]["color"] = (0, 0, 0, 0)
+    ax.grid(False)
+    ax.set_axis_off()
+
+    # Shadow disc at z_floor
+    ax.scatter(x1, x2, np.full_like(values, z_floor),
+               c="#9e9e9e", s=s, alpha=0.9, edgecolors="none", zorder=1)
+
+    # Factor surface
+    ax.scatter(x1, x2, values,
+               c=values, cmap=cmap, s=s, alpha=alpha,
+               edgecolors="none", zorder=2, vmin=vmin, vmax=vmax)
+
+    ax.set_xlim(float(x1.min()), float(x1.max()))
+    ax.set_ylim(float(x2.max()), float(x2.min()))  # inverted y
+    ax.set_zlim(z_floor, z_ceil)
+    ax.margins(0, 0, 0)
+    ax.view_init(elev=elev, azim=azim)
+    ax.dist = 4
+
+    pos = ax.get_position()
+    pad = 0.18
+    ax.set_position([pos.x0 - pad * pos.width,
+                     pos.y0 - pad * pos.height,
+                     pos.width  * (1 + 2 * pad),
+                     pos.height * (1 + 2 * pad)])
+
+
+def plot_groupwise_factors(
+    factors: np.ndarray,
+    groupwise_factors: dict,
+    coords: np.ndarray,
+    groups: np.ndarray,
+    group_names: List[str],
+    s: float = 0.5,
+    panel_size: float = 2.5,
+    cmap: str = "turbo",
+) -> plt.Figure:
+    """Grid figure of groupwise conditional posterior factor maps.
+
+    Layout: (G+1) rows × (L+1) cols
+    - Row 0:    [off] [F0 uncond] [F1 uncond] ... [FL-1 uncond]
+    - Rows 1..G: [group_loc] [F0 cond_g] [F1 cond_g] ... [FL-1 cond_g]
+
+    Shared vmin/vmax from 99th percentile of unconditional factors.
+
+    Args:
+        factors:           (N, L) unconditional factor means
+        groupwise_factors: dict {g: (N, L)} conditional factor means
+        coords:            (N, 2) spatial coordinates
+        groups:            (N,) integer group codes
+        group_names:       list of G group name strings
+        s:                 scatter point size
+        panel_size:        inches per panel (both axes)
+        cmap:              colormap for factor panels
+
+    Returns:
+        matplotlib Figure
+    """
+    N, L = factors.shape
+    G = len(group_names)
+    n_rows = G + 1
+    n_cols = L + 1
+
+    # Shared color scale from unconditional factors
+    vmin = 0.0
+    vmax = float(np.percentile(factors, 99))
+
+    fig, axes = plt.subplots(
+        n_rows, n_cols,
+        figsize=(n_cols * panel_size, n_rows * panel_size),
+        squeeze=False,
+    )
+
+    # (0, 0): empty / off
+    axes[0, 0].set_visible(False)
+
+    # Row 0, cols 1..L: unconditional factor maps + column headers
+    for l in range(L):
+        ax = axes[0, l + 1]
+        ax.scatter(
+            coords[:, 0], coords[:, 1], c=factors[:, l],
+            vmin=vmin, vmax=vmax, cmap=cmap, s=s, alpha=0.8,
+            edgecolors="none", rasterized=True,
+        )
+        ax.invert_yaxis()
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.set_facecolor("gray")
+        ax.set_title(f"Factor {l + 1}", fontsize=8)
+
+    # Rows 1..G
+    for g in range(G):
+        # Col 0: group location panel
+        ax_loc = axes[g + 1, 0]
+        _draw_group_loc_panel(ax_loc, coords, groups, g, s=s)
+        display_name = " ".join(group_names[g].split("_")[:2])
+        ax_loc.set_ylabel(display_name, rotation=0, fontsize=8, labelpad=50,
+                          ha="right", va="center")
+
+        # Cols 1..L: conditional factor maps
+        factors_g = groupwise_factors.get(g)
+        for l in range(L):
+            ax = axes[g + 1, l + 1]
+            if factors_g is not None:
+                ax.scatter(
+                    coords[:, 0], coords[:, 1], c=factors_g[:, l],
+                    vmin=vmin, vmax=vmax, cmap=cmap, s=s, alpha=0.8,
+                    edgecolors="none", rasterized=True,
+                )
+            ax.invert_yaxis()
+            ax.set_xticks([])
+            ax.set_yticks([])
+            ax.set_facecolor("gray")
+
+    fig.tight_layout(pad=0.3)
+    return fig
+
+
+def plot_groupwise_factors_3d(
+    factors: np.ndarray,
+    groupwise_factors: dict,
+    coords: np.ndarray,
+    groups: np.ndarray,
+    group_names: List[str],
+    top_groups: np.ndarray,
+    s: float = 0.5,
+    cmap: str = "turbo",
+    w_col: float = 3.5,
+    h_header: float = 2.5,
+    h_factor: float = 4.5,
+) -> plt.Figure:
+    """Compact 3×4 figure: top-2 factors × top-3 groups with 3D surface panels.
+
+    Layout:
+        Row 0 (header): [empty] [group A loc] [group B loc] [group C loc]
+        Row 1 (F0):     [F0 uncond 3D] [cond gA F0] [cond gB F0] [cond gC F0]
+        Row 2 (F1):     [F1 uncond 3D] [cond gA F1] [cond gB F1] [cond gC F1]
+
+    Shared vmin/vmax and z-limits across all 3D panels derived from
+    unconditional factor percentiles (top-2 factors combined).
+
+    Args:
+        factors:           (N, L) unconditional factor means (already Moran-sorted)
+        groupwise_factors: dict {g: (N, L)} conditional factor means
+        coords:            (N, 2) spatial coordinates
+        groups:            (N,) integer group codes
+        group_names:       list of group name strings
+        top_groups:        indices of top-3 groups by cell count
+        s:                 base scatter point size
+        cmap:              colormap for factor panels
+
+    Returns:
+        matplotlib Figure
+    """
+    from matplotlib.gridspec import GridSpec
+
+    N = coords.shape[0]
+    base = _auto_point_size(N)
+    s_2d = base * 0.5
+    s_3d = base * 0.6
+
+    n_factors = min(2, factors.shape[1])
+    n_groups_show = len(top_groups)  # 3
+    n_rows = 1 + n_factors   # header + 2 factor rows
+    n_cols = 1 + n_groups_show  # uncond + 3 groups
+
+    # Shared color scale from unconditional top-2 factors
+    uncond_vals = factors[:, :n_factors].ravel()
+    vmin = float(np.percentile(uncond_vals, 1))
+    vmax = float(np.percentile(uncond_vals, 99))
+    z_range = vmax - vmin
+    z_floor = vmin - 0.4 * z_range
+
+    fig = plt.figure(figsize=(n_cols * w_col, h_header + n_factors * h_factor + 0.5))
+    gs = GridSpec(
+        n_rows, n_cols, figure=fig,
+        height_ratios=[h_header] + [h_factor] * n_factors,
+        left=0.02, right=0.99, top=0.94, bottom=0.01,
+        wspace=0.05, hspace=0.08,
+    )
+
+    # Row 0, col 0: empty
+    ax00 = fig.add_subplot(gs[0, 0])
+    ax00.set_visible(False)
+
+    # Row 0, cols 1..3: group location panels (2D)
+    for i, g in enumerate(top_groups):
+        ax = fig.add_subplot(gs[0, i + 1])
+        _draw_group_loc_panel(ax, coords, groups, int(g), s=s_2d)
+        ax.set_title(group_names[int(g)], fontsize=9)
+
+    # Rows 1..n_factors: factor rows
+    for fi in range(n_factors):
+        # Col 0: unconditional 3D
+        ax_uncond = fig.add_subplot(gs[fi + 1, 0], projection="3d")
+        _draw_factor_3d_shared(
+            ax_uncond, coords, factors[:, fi],
+            vmin=vmin, vmax=vmax, z_floor=z_floor, z_ceil=vmax,
+            cmap=cmap, s=s_3d,
+        )
+        ax_uncond.set_title(f"Factor {fi + 1}\n(unconditional)", fontsize=8)
+
+        # Cols 1..3: conditional 3D
+        for i, g in enumerate(top_groups):
+            ax = fig.add_subplot(gs[fi + 1, i + 1], projection="3d")
+            factors_g = groupwise_factors.get(int(g))
+            if factors_g is not None:
+                _draw_factor_3d_shared(
+                    ax, coords, factors_g[:, fi],
+                    vmin=vmin, vmax=vmax, z_floor=z_floor, z_ceil=vmax,
+                    cmap=cmap, s=s_3d,
+                )
+
+    fig.suptitle(
+        "Groupwise Conditional Posterior  (top-2 factors, top-3 groups)",
+        fontsize=12, y=0.98,
+    )
+    return fig
+
+
 def _auto_point_size(N: int) -> float:
     """Scale point size as 100 / sqrt(N) so visual density stays consistent."""
     return 100.0 / np.sqrt(N)
@@ -1121,6 +1395,33 @@ def run(config_path: str):
             )
             plt.close(fig)
             print(f"  Saved: {figures_dir}/enrichment_factor_{factor_idx + 1}.png")
+
+    # 6. Groupwise conditional posterior figures (MGGP models only)
+    groupwise_factors = results.get("groupwise_factors")
+    if groupwise_factors is not None and data.groups is not None:
+        groups_np = data.groups.numpy()
+        G = data.n_groups
+
+        print("Generating groupwise factors figure (2D grid)...")
+        fig = plot_groupwise_factors(
+            factors, groupwise_factors, coords, groups_np, group_names, s=s,
+        )
+        fig.savefig(figures_dir / "groupwise_factors.png", dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"  Saved: {figures_dir}/groupwise_factors.png")
+
+        # 3D compact figure: top-2 factors × top-3 groups
+        if factors.shape[1] >= 2:
+            print("Generating groupwise factors 3D figure...")
+            counts = np.bincount(groups_np, minlength=G)
+            top_groups = np.argsort(counts)[::-1][:3]
+            fig = plot_groupwise_factors_3d(
+                factors, groupwise_factors, coords, groups_np, group_names,
+                top_groups=top_groups, s=s,
+            )
+            fig.savefig(figures_dir / "groupwise_factors_3d.png", dpi=150, bbox_inches="tight")
+            plt.close(fig)
+            print(f"  Saved: {figures_dir}/groupwise_factors_3d.png")
 
     print("\nFigures generation complete!")
     print(f"  All figures saved to: {figures_dir}/")
