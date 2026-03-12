@@ -21,6 +21,7 @@ class LiverLoader(DatasetLoader):
         "spatial_scale": 50.0,
         "path": "/gladstone/engelhardt/lab/lchumpitaz/datasets/liver/adata_healthy_merfish.h5ad",
         "cell_type_column": "Cell_Type",
+        "sample_id": None,
     }
 
     def load(self, preprocessing: dict) -> SpatialData:
@@ -33,6 +34,8 @@ class LiverLoader(DatasetLoader):
             - path: str, path to h5ad file
             - cell_type_column: str, obs column for cell types
               (use "Cell_Type" for healthy, "Cell_Type_final" for diseased)
+            - sample_id: str or None (default None). If set, filter to cells
+              from only this donor (obs["sample_id"] == sample_id).
         """
         params = {**self.DEFAULTS, **preprocessing}
 
@@ -44,6 +47,17 @@ class LiverLoader(DatasetLoader):
             ) from e
 
         adata = ad.read_h5ad(params["path"])
+
+        if params["sample_id"] is not None:
+            mask = adata.obs["sample_id"] == params["sample_id"]
+            if mask.sum() == 0:
+                available = list(adata.obs["sample_id"].unique())
+                raise RuntimeError(
+                    f"sample_id '{params['sample_id']}' not found. "
+                    f"Available: {available}"
+                )
+            adata = adata[mask].copy()
+
         cell_type_col = params["cell_type_column"]
 
         if cell_type_col not in adata.obs:
