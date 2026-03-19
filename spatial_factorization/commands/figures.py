@@ -1200,6 +1200,83 @@ def _auto_point_size(N: int) -> float:
     return 100.0 / np.sqrt(N)
 
 
+# Shared vmax for training animation GIFs: max 99th-percentile across variants (slideseq, 20k iters)
+_PNMF_VIDEO_VMAX = 9.29    # max(pnmf_scaled, pnmf_unscaled) p99
+_SVGP_VIDEO_VMAX = 15.91   # max(svgp_scaled, svgp_unscaled) p99
+
+
+def _render_training_gif(
+    frames_path: Path, moran_path: Path, iters_path: Path,
+    coords: np.ndarray, model_dir: Path, spatial: bool,
+) -> None:
+    """Render training animation GIF from saved video frames.
+
+    Frames must already be Moran-ordered (done by analyze stage).
+    Uses a fixed palette (253 turbo + gray/white/black) for fast quantization.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import matplotlib.cm as mcm
+    from PIL import Image
+
+    frames_arr = np.load(frames_path)          # (n_frames, N, L) — already ordered
+    moran_values = np.load(moran_path)         # (L,) sorted descending
+    frame_iters = np.load(iters_path).tolist()
+    n_frames, N, L = frames_arr.shape
+
+    vmax = _SVGP_VIDEO_VMAX if spatial else _PNMF_VIDEO_VMAX
+
+    ncols, figsize_per = 5, 3.0
+    nrows = int(np.ceil(L / ncols))
+    s = 100 / np.sqrt(N)
+
+    fig, axes = plt.subplots(nrows, ncols,
+                             figsize=(figsize_per * ncols, figsize_per * nrows),
+                             squeeze=False)
+    axes_flat = axes.flatten()
+    scatters = []
+    for i in range(L):
+        ax = axes_flat[i]
+        sc = ax.scatter(coords[:, 0], coords[:, 1],
+                        c=frames_arr[0, :, i], s=s, cmap="turbo",
+                        vmin=0.0, vmax=vmax, alpha=0.8, rasterized=True)
+        ax.invert_yaxis()
+        ax.set_xticks([]); ax.set_yticks([])
+        ax.set_facecolor("gray")
+        ax.set_title(f"Factor {i+1}\nI={moran_values[i]:.3f}", fontsize=9)
+        scatters.append(sc)
+    for i in range(L, nrows * ncols):
+        axes_flat[i].set_visible(False)
+    fig.suptitle(f"iter={frame_iters[0]}", y=0.98)
+    fig.tight_layout()
+
+    # Fixed palette: 253 turbo + gray (axes bg) + white (fig bg) + black (text)
+    turbo_colors = (mcm.turbo(np.linspace(0, 1, 253))[:, :3] * 255).astype(np.uint8)
+    extras = np.array([[128, 128, 128], [255, 255, 255], [0, 0, 0]], dtype=np.uint8)
+    palette_img = Image.new("P", (1, 1))
+    palette_img.putpalette(np.vstack([turbo_colors, extras]).flatten().tolist())
+
+    gif_frames = []
+    for fi in range(n_frames):
+        for i, sc in enumerate(scatters):
+            sc.set_array(frames_arr[fi, :, i])
+        fig.suptitle(f"iter={frame_iters[fi]}", y=0.98)
+        fig.canvas.draw()
+        w, h = fig.canvas.get_width_height()
+        buf = np.frombuffer(fig.canvas.buffer_rgba(), dtype=np.uint8).reshape(h, w, 4)
+        gif_frames.append(Image.fromarray(buf[:, :, :3]).quantize(palette=palette_img, dither=0))
+        if fi % 20 == 0:
+            print(f"  {fi + 1}/{n_frames} frames rendered...")
+
+    plt.close("all")
+
+    gif_path = model_dir / "training_animation.gif"
+    gif_frames[0].save(str(gif_path), save_all=True, append_images=gif_frames[1:],
+                       loop=0, duration=100, optimize=False)
+    print(f"  Saved: {gif_path} ({gif_path.stat().st_size // 1024 // 1024}MB)")
+
+
 def run(config_path: str):
     """Generate publication figures.
 
@@ -1422,6 +1499,17 @@ def run(config_path: str):
             fig.savefig(figures_dir / "groupwise_factors_3d.png", dpi=150, bbox_inches="tight")
             plt.close(fig)
             print(f"  Saved: {figures_dir}/groupwise_factors_3d.png")
+
+    # Training animation GIF (only if video frames were captured during training)
+    video_frames_path = model_dir / "video_frames.npy"
+    video_moran_path = model_dir / "video_moran_values.npy"
+    video_iters_path = model_dir / "video_frame_iters.npy"
+    if video_frames_path.exists() and video_moran_path.exists() and video_iters_path.exists():
+        print("\nRendering training animation GIF...")
+        _render_training_gif(
+            video_frames_path, video_moran_path, video_iters_path,
+            coords, model_dir, spatial=config.spatial,
+        )
 
     print("\nFigures generation complete!")
     print(f"  All figures saved to: {figures_dir}/")

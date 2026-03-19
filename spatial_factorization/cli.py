@@ -36,10 +36,11 @@ def preprocess(config):
 @cli.command()
 @click.option("--config", "-c", required=True, type=click.Path(exists=True), help="Path to config YAML")
 @click.option("--resume", is_flag=True, default=False, help="Resume training from saved checkpoint, appending to ELBO history")
-def train(config, resume):
+@click.option("--video", is_flag=True, default=False, help="Capture factor snapshots during training and save as MP4.")
+def train(config, resume, video):
     """Train a PNMF model."""
     from .commands import train as train_cmd
-    train_cmd.run(config, resume=resume)
+    train_cmd.run(config, resume=resume, video=video)
 
 
 @cli.command()
@@ -111,9 +112,11 @@ def multianalyze(config, models, n_pairs, match_against, output):
 @click.option("--force", is_flag=True, help="Force re-run preprocessing")
 @click.option("--dry-run", is_flag=True, help="Show plan without executing")
 @click.option("--resume", is_flag=True, help="Resume training: resumes models with a checkpoint, trains new ones from scratch")
+@click.option("--video", is_flag=True, default=False, help="Capture factor snapshots during training and save as GIF.")
+@click.option("--gpu-only", is_flag=True, default=False, help="Only assign jobs to GPUs; never fall back to CPU.")
 @click.option("--config-name", default="general.yaml", show_default=True, help="Config filename to search for when config is a directory (e.g. general_test.yaml)")
 @click.option("--failed", "failed_only", is_flag=True, help="Re-run only jobs that failed in the previous run (reads run_status.json)")
-def run_pipeline(stages, config, force, dry_run, resume, config_name, failed_only):
+def run_pipeline(stages, config, force, dry_run, resume, video, gpu_only, config_name, failed_only):
     """Run pipeline stages sequentially, or run all models in parallel.
 
     \b
@@ -162,7 +165,7 @@ def run_pipeline(stages, config, force, dry_run, resume, config_name, failed_onl
     if "all" in stages:
         from .runner import JobRunner
 
-        JobRunner(config, force_preprocess=force, dry_run=dry_run, resume=resume, config_name=config_name, failed_only=failed_only).run()
+        JobRunner(config, force_preprocess=force, dry_run=dry_run, resume=resume, config_name=config_name, failed_only=failed_only, video=video, gpu_only=gpu_only).run()
         return
 
     # Validate stages
@@ -178,9 +181,9 @@ def run_pipeline(stages, config, force, dry_run, resume, config_name, failed_onl
         click.echo(f"\n{'='*60}")
         click.echo(f"  Stage: {stage}")
         click.echo(f"{'='*60}\n")
-        if stage == "train" and resume:
+        if stage == "train":
             from .commands import train as train_cmd
-            train_cmd.run(config, resume=True)
+            train_cmd.run(config, resume=resume, video=video)
         else:
             _run_stage(stage, config)
     click.echo(f"\nAll stages complete.")

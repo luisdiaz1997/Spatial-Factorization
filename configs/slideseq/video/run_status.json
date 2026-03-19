@@ -1,0 +1,27 @@
+{
+  "start_time": "2026-03-11T21:39:15.077160",
+  "end_time": "2026-03-12T00:33:10.994802",
+  "elapsed_seconds": 10435.917642,
+  "jobs": {
+    "slideseq_pnmf_scaled": {
+      "config_path": "configs/slideseq/video/pnmf_scaled.yaml",
+      "status": "completed",
+      "elapsed": 725.6067831516266
+    },
+    "slideseq_pnmf_unscaled": {
+      "config_path": "configs/slideseq/video/pnmf_unscaled.yaml",
+      "status": "completed",
+      "elapsed": 723.5802764892578
+    },
+    "slideseq_svgp_scaled": {
+      "config_path": "configs/slideseq/video/svgp_scaled.yaml",
+      "status": "completed",
+      "elapsed": 9424.460600852966
+    },
+    "slideseq_svgp_unscaled": {
+      "config_path": "configs/slideseq/video/svgp_unscaled.yaml",
+      "status": "completed",
+      "elapsed": 9547.780586481094
+    }
+  }
+}

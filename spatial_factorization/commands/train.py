@@ -176,7 +176,41 @@ def _get_training_metadata(model, config: Config, data, train_time: float, prev_
     }
 
 
-def run(config_path: str, resume: bool = False):
+def _make_video_callback(config: Config, data, video_interval: int, frames: list, frame_iters: list):
+    """Return a callback that captures factor snapshots during training."""
+    import torch
+
+    def callback(model, iteration, elbo_value):
+        with torch.no_grad():
+            if config.spatial:
+                # Run GP predictive pass on all training coords (batched to avoid OOM)
+                from PNMF.transforms import _get_spatial_qF
+                coords_np = data.X.numpy()
+                groups_np = data.groups.numpy() if config.groups else None
+                chunk = 10000
+                N = coords_np.shape[0]
+                chunks_F = []
+                for start in range(0, N, chunk):
+                    coords_b = torch.from_numpy(coords_np[start:start + chunk]).to(model._get_device())
+                    groups_b = (
+                        torch.from_numpy(groups_np[start:start + chunk]).to(model._get_device())
+                        if groups_np is not None else None
+                    )
+                    qF = _get_spatial_qF(model, coordinates=coords_b, groups=groups_b)
+                    chunks_F.append(torch.exp(qF.mean.detach().cpu()).T)  # (chunk, L)
+                F = torch.cat(chunks_F, dim=0).numpy()  # (N, L)
+            else:
+                # Non-spatial: exp(prior.mean) transposed
+                F = torch.exp(model._prior.mean.detach().cpu()).T.numpy()  # (N, L)
+
+        frames.append(F)
+        frame_iters.append(iteration)
+
+    return callback
+
+
+
+def run(config_path: str, resume: bool = False, video: bool = False):
     """Train a PNMF model from config.
 
     Output files (outputs/{dataset}/{model}/):
@@ -236,6 +270,16 @@ def run(config_path: str, resume: bool = False):
         model = PNMF(random_state=config.seed, **pnmf_kwargs)
         print(f"Training PNMF with {n_components} components (mode={mode}, device={device})...")
 
+    # Build optional video callback
+    video_frames = []
+    video_frame_iters = []
+    video_interval = config.training.get("video_interval", 20)
+    if video:
+        print(f"  Video mode: capturing frames every {video_interval} iterations")
+        video_callback = _make_video_callback(config, data, video_interval, video_frames, video_frame_iters)
+    else:
+        video_callback = None
+
     # Train (spatial models require coordinates; groups are optional)
     t0 = time.perf_counter()
     if config.spatial:
@@ -253,10 +297,17 @@ def run(config_path: str, resume: bool = False):
         )
         if config.groups:
             fit_kwargs["groups"] = data.groups.numpy()
+        if video_callback is not None:
+            fit_kwargs["callback"] = video_callback
+            fit_kwargs["callback_interval"] = video_interval
 
         elbo_history, model = model.fit(data.Y.numpy(), **fit_kwargs)
     else:
-        elbo_history, model = model.fit(data.Y.numpy(), return_history=True)
+        fit_kwargs = dict(return_history=True)
+        if video_callback is not None:
+            fit_kwargs["callback"] = video_callback
+            fit_kwargs["callback_interval"] = video_interval
+        elbo_history, model = model.fit(data.Y.numpy(), **fit_kwargs)
     train_time = time.perf_counter() - t0
 
     if resume:
@@ -274,6 +325,13 @@ def run(config_path: str, resume: bool = False):
     # Save outputs
     model_dir.mkdir(parents=True, exist_ok=True)
     _save_model(model, config, model_dir)
+
+    # Save video frames if captured (analyze will reorder, figures will render GIF)
+    if video and video_frames:
+        frames_arr = np.stack(video_frames, axis=0)  # (n_frames, N, L)
+        np.save(model_dir / "video_frames.npy", frames_arr)
+        np.save(model_dir / "video_frame_iters.npy", np.array(video_frame_iters))
+        print(f"\nSaved {len(video_frames)} video frames to {model_dir}/video_frames.npy")
 
     if resume:
         _append_elbo_history(elbo_history, model_dir)

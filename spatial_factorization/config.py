@@ -92,7 +92,19 @@ class Config:
         - Non-spatial: "pnmf"
         - Spatial, no groups: "{prior}" e.g. "svgp"
         - Spatial, with groups: "mggp_{prior}" e.g. "mggp_svgp"
+
+        model.model_name_override bypasses all of the above and returns the
+        override value directly. Use this when two configs share the same
+        spatial/groups flags but differ in other ways (e.g. scale_ll_D) and
+        need to coexist in the same output_dir without overwriting each other.
+
+        Example:
+            model_name_override: pnmf_scaled   → outputs/.../pnmf_scaled/
+            model_name_override: pnmf_unscaled → outputs/.../pnmf_unscaled/
         """
+        override = self.model.get("model_name_override")
+        if override:
+            return override
         if not self.spatial:
             return "pnmf"
         prior = self.model.get("prior", "SVGP").lower()
@@ -152,6 +164,10 @@ class Config:
         kwargs["batch_size"] = self.training.get("batch_size") or self.training.get("x_batch")
         kwargs["y_batch_size"] = self.training.get("y_batch_size") or self.training.get("y_batch")
         kwargs["shuffle"] = self.training.get("shuffle", True)
+
+        # ELBO scaling flags (default True = correct; False = old behaviour for video demos)
+        kwargs["scale_ll_D"] = self.model.get("scale_ll_D", True)
+        kwargs["scale_kl_NM"] = self.model.get("scale_kl_NM", True)
 
         return kwargs
 

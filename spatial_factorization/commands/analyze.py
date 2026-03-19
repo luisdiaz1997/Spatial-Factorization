@@ -716,6 +716,16 @@ def run(config_path: str):
             group_loadings_result["loadings"][g] = group_loadings_result["loadings"][g][:, sort_order]
     print(f"  Factor order (by Moran's I): {sort_order.tolist()}")
 
+    # Reorder video frames if they exist (same sort_order as factors, avoids re-running Moran's I)
+    video_frames_path = model_dir / "video_frames.npy"
+    if video_frames_path.exists():
+        print("  Reordering video frames to match factor order...")
+        video_frames = np.load(video_frames_path)          # (n_frames, N, L)
+        video_frames = video_frames[:, :, sort_order]
+        np.save(video_frames_path, video_frames)
+        np.save(model_dir / "video_moran_values.npy", moran_values)
+        print(f"  Saved reordered video frames and Moran's I cache.")
+
     # Save factors
     np.save(model_dir / "factors.npy", factors)
 

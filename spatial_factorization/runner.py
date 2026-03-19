@@ -99,6 +99,7 @@ class Job:
     log_file: Optional[Path] = None
     thread: Optional[threading.Thread] = None
     resume: bool = False  # Whether to resume training from a checkpoint
+    video: bool = False   # Whether to capture training animation frames
 
 
 @dataclass
@@ -140,6 +141,8 @@ class JobRunner:
         resume: bool = False,
         config_name: str = "general.yaml",
         failed_only: bool = False,
+        video: bool = False,
+        gpu_only: bool = False,
     ):
         """Initialize the job runner.
 
@@ -150,6 +153,7 @@ class JobRunner:
             resume: Resume models with a checkpoint; train new ones from scratch.
             config_name: Filename to search for when config_path is a directory.
             failed_only: Only re-run jobs that failed in the previous run_status.json.
+            gpu_only: Only assign jobs to GPUs; never fall back to CPU.
         """
         self.config_path = Path(config_path)
         self.force_preprocess = force_preprocess
@@ -157,6 +161,8 @@ class JobRunner:
         self.resume = resume
         self.config_name = config_name
         self.failed_only = failed_only
+        self.video = video
+        self.gpu_only = gpu_only
         self.jobs: List[Job] = []
         self.run_status = RunStatus()
         self.status_manager = StatusManager()
@@ -203,7 +209,7 @@ class JobRunner:
             unique_prefix = "_".join(out_path.parts[1:]) if len(out_path.parts) > 1 else out_path.name
             job_name = f"{unique_prefix}_{config.model_name}"
 
-            job = Job(name=job_name, config_path=path, log_file=log_file, resume=self.resume)
+            job = Job(name=job_name, config_path=path, log_file=log_file, resume=self.resume, video=self.video)
             self.jobs.append(job)
             self.run_status.jobs[job.name] = {
                 "config_path": str(path),
@@ -291,20 +297,26 @@ class JobRunner:
 
         if self.config_path.is_dir():
             general_configs = list(self.config_path.rglob(self.config_name))
-            if not general_configs:
-                raise ValueError(f"No general.yaml found in {self.config_path}")
 
-            print(f"Found {len(general_configs)} general config(s)")
+            if general_configs:
+                print(f"Found {len(general_configs)} general config(s)")
+                config_paths = []
+                for general_path in general_configs:
+                    from .generate import generate_configs
+                    generated = generate_configs(general_path)
+                    config_paths.extend(generated.values())
+                    print(f"  {general_path.parent.name}: {len(generated)} models")
+                return config_paths
 
-            config_paths = []
-            for general_path in general_configs:
-                from .generate import generate_configs
-
-                generated = generate_configs(general_path)
-                config_paths.extend(generated.values())
-                print(f"  {general_path.parent.name}: {len(generated)} models")
-
-            return config_paths
+            # No general configs found — treat every yaml in the directory as a
+            # per-model config (e.g. configs/slideseq/video/ with named variants)
+            per_model = sorted(self.config_path.rglob("*.yaml"))
+            if not per_model:
+                raise ValueError(f"No yaml configs found in {self.config_path}")
+            print(f"Found {len(per_model)} per-model config(s) (no {self.config_name})")
+            for p in per_model:
+                print(f"  {p.name}")
+            return per_model
 
         if Config.is_general_config(self.config_path):
             from .generate import generate_configs
@@ -412,6 +424,8 @@ class JobRunner:
                             job.gpu_id = gpu_id
                             train_gpu_slots.add(gpu_id)
                             print(f"  [{job.name}] Training on GPU {gpu_id}")
+                        elif self.gpu_only:
+                            continue  # Wait for a GPU to free up
                         elif not get_cpu_in_use():
                             # CPU fallback when all GPUs busy
                             job.device = "cpu"
@@ -420,6 +434,8 @@ class JobRunner:
                         else:
                             continue
                     else:
+                        if self.gpu_only:
+                            continue  # Never assign CPU when gpu_only
                         if not get_cpu_in_use():
                             job.device = "cpu"
                             train_cpu_slot = True
@@ -522,6 +538,8 @@ class JobRunner:
                                 analyze_device = f"cuda:{analyze_gpu_id}"
                                 analyze_gpu_slots.add(analyze_gpu_id)
                                 print(f"  [{job.name}] Analyzing on GPU {analyze_gpu_id}")
+                            elif self.gpu_only:
+                                continue  # Wait for a GPU to free up
                             elif not get_cpu_in_use():
                                 # CPU fallback when all GPUs busy
                                 analyze_device = "cpu"
@@ -531,6 +549,8 @@ class JobRunner:
                             else:
                                 continue  # No resources available
                         else:
+                            if self.gpu_only:
+                                continue  # Never assign CPU when gpu_only
                             if not get_cpu_in_use():
                                 analyze_device = "cpu"
                                 analyze_uses_cpu = True
@@ -603,6 +623,8 @@ class JobRunner:
         cmd = [sys.executable, "-m", "spatial_factorization", "run"] + stages
         if task == "train" and job.resume:
             cmd.append("--resume")
+        if task == "train" and job.video:
+            cmd.append("--video")
         cmd += ["-c", str(job.config_path)]
 
         try:
