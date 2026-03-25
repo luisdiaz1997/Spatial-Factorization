@@ -176,6 +176,17 @@ def run_pipeline(stages, config, force, dry_run, resume, video, gpu_only, config
 
     # Sort stages into pipeline order
     ordered = [s for s in STAGE_ORDER if s in stages]
+
+    # If config is a directory or general.yaml, fan out through the multiplexer
+    from pathlib import Path as _Path
+    from .config import Config as _Config
+    config_path = _Path(config)
+    if config_path.is_dir() or _Config.is_general_config(config_path):
+        from .runner import JobRunner
+        JobRunner(config, stages=ordered, force_preprocess=force, dry_run=dry_run, resume=resume, config_name=config_name, failed_only=failed_only, video=video, gpu_only=gpu_only).run()
+        return
+
+    # Existing sequential path (single per-model config, no multiplexer)
     click.echo(f"Running stages: {' → '.join(ordered)}")
     for stage in ordered:
         click.echo(f"\n{'='*60}")

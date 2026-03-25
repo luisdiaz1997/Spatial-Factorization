@@ -80,6 +80,15 @@ def _load_analysis_results(model_dir: Path) -> dict:
         with open(enrichment_path) as f:
             results["gene_enrichment"] = json.load(f)
 
+    # Load PCA gene order (computed in analyze stage)
+    pca_gene_order_path = model_dir / "pca_gene_order.npy"
+    if pca_gene_order_path.exists():
+        results["pca_gene_order"] = np.load(pca_gene_order_path)
+
+    pca_gene_order_by_celltype_path = model_dir / "pca_gene_order_by_celltype.npy"
+    if pca_gene_order_by_celltype_path.exists():
+        results["pca_gene_order_by_celltype"] = np.load(pca_gene_order_by_celltype_path)
+
     # Load groupwise conditional posterior factors (MGGP models)
     groupwise_dir = model_dir / "groupwise_factors"
     if groupwise_dir.exists():
@@ -548,6 +557,170 @@ def plot_gene_enrichment_heatmap(
     # Add colorbar
     cbar = fig.colorbar(im, ax=ax, shrink=0.8)
     cbar.set_label("Mean |LFC|", fontsize=10)
+
+    fig.tight_layout()
+    return fig
+
+
+def plot_celltype_gene_loadings(
+    group_loadings: dict,
+    group_names: List[str],
+    gene_names: List[str],
+    factor_idx: int,
+    pca_gene_order: np.ndarray,
+    global_loadings: Optional[np.ndarray] = None,
+    figsize: Optional[tuple] = None,
+) -> plt.Figure:
+    """Plot cell-type x genes heatmap of LFC (group vs global) for one factor.
+
+    Normalizes both group and global loadings per gene across factors, then
+    computes log2(group_norm / global_norm). This shows relative enrichment
+    or depletion of each gene in each cell type for this factor, regardless
+    of the factor's overall loading magnitude.
+
+    Args:
+        group_loadings: dict mapping group_id -> (D, L) loadings
+        group_names: List of group names
+        gene_names: List of gene names (length D)
+        factor_idx: Which factor (column) to plot
+        pca_gene_order: (D,) gene index order from per-factor PCA on LFC across groups
+        global_loadings: (D, L) global loadings for normalization reference.
+            If None, uses the mean across groups as global reference.
+        figsize: Figure size (defaults to auto based on D and G)
+
+    Returns:
+        matplotlib Figure
+    """
+    eps = 1e-10
+    sorted_group_ids = sorted(group_loadings.keys())
+    G = len(sorted_group_ids)
+    D = len(gene_names)
+
+    # Build global reference: normalize per gene across factors
+    if global_loadings is not None:
+        ref = np.maximum(global_loadings, eps)
+    else:
+        stacked = np.stack([group_loadings[g] for g in sorted_group_ids], axis=0)  # (G, D, L)
+        ref = np.maximum(stacked.mean(axis=0), eps)  # (D, L)
+    ref_norm = ref / ref.sum(axis=1, keepdims=True)  # (D, L), rows sum to 1
+    global_col = ref_norm[:, factor_idx]  # (D,)
+
+    # Build (G, D) LFC matrix
+    lfc_rows = []
+    for g in sorted_group_ids:
+        grp = np.maximum(group_loadings[g], eps)  # (D, L)
+        grp_norm = grp / grp.sum(axis=1, keepdims=True)
+        grp_col = grp_norm[:, factor_idx]  # (D,)
+        lfc_rows.append(np.log2(grp_col / global_col))
+    mat = np.stack(lfc_rows, axis=0)  # (G, D)
+
+    # Reorder genes by PCA
+    mat = mat[:, pca_gene_order]
+    ordered_gene_names = [gene_names[i] for i in pca_gene_order]
+
+    # Symmetric color scale
+    abs_max = np.nanmax(np.abs(mat))
+    abs_max = max(abs_max, 0.1)  # avoid degenerate range
+
+    if figsize is None:
+        fig_w = max(12, D * 0.12)
+        fig_h = max(3, G * 0.5 + 1.5)
+        figsize = (fig_w, fig_h)
+
+    fig, ax = plt.subplots(figsize=figsize)
+    im = ax.imshow(mat, aspect="auto", cmap="bwr", vmin=-abs_max, vmax=abs_max)
+
+    ax.set_yticks(np.arange(G))
+    ax.set_yticklabels(
+        [group_names[g] for g in sorted_group_ids], fontsize=9
+    )
+    ax.set_xticks(np.arange(D))
+    ax.set_xticklabels(ordered_gene_names, fontsize=6, rotation=90)
+    ax.set_xlabel("Genes (ordered by PC1 of stacked loadings)", fontsize=10)
+    ax.set_ylabel("Cell Type", fontsize=10)
+    ax.set_title(f"Factor {factor_idx + 1} — Cell-type loadings", fontsize=11)
+
+    cbar = fig.colorbar(im, ax=ax, shrink=0.7)
+    cbar.set_label("log2(group / global)", fontsize=9)
+
+    fig.tight_layout()
+    return fig
+
+
+def plot_factor_gene_loadings(
+    group_loadings: dict,
+    group_names: List[str],
+    gene_names: List[str],
+    group_idx: int,
+    pca_gene_order: np.ndarray,
+    global_loadings: Optional[np.ndarray] = None,
+    figsize: Optional[tuple] = None,
+) -> plt.Figure:
+    """Plot factors x genes heatmap of LFC for one cell type, genes ordered by per-celltype PCA.
+
+    For cell type g, computes log2(group_norm / global_norm) for each (gene, factor) pair,
+    then orders genes by PC1 of the (D, L) LFC matrix for that cell type.
+
+    Args:
+        group_loadings: dict mapping group_id -> (D, L) loadings
+        group_names: List of group names
+        gene_names: List of gene names (length D)
+        group_idx: Which cell type (index into sorted group keys) to plot
+        pca_gene_order: (D,) gene index order from per-celltype PCA
+        global_loadings: (D, L) global loadings for normalization reference.
+            If None, uses the mean across groups as global reference.
+        figsize: Figure size (defaults to auto based on D and L)
+
+    Returns:
+        matplotlib Figure
+    """
+    eps = 1e-10
+    sorted_group_ids = sorted(group_loadings.keys())
+    g = sorted_group_ids[group_idx]
+    L = next(iter(group_loadings.values())).shape[1]
+    D = len(gene_names)
+
+    # Normalize global reference
+    if global_loadings is not None:
+        ref = np.maximum(global_loadings, eps)
+    else:
+        stacked = np.stack([group_loadings[gi] for gi in sorted_group_ids], axis=0)
+        ref = np.maximum(stacked.mean(axis=0), eps)
+    ref_norm = ref / ref.sum(axis=1, keepdims=True)  # (D, L)
+
+    # Compute LFC for this group: (D, L)
+    grp = np.maximum(group_loadings[g], eps)
+    grp_norm = grp / grp.sum(axis=1, keepdims=True)
+    lfc = np.log2(grp_norm / ref_norm)  # (D, L)
+
+    # Reorder genes by per-celltype PCA, then transpose to (L, D) for imshow
+    lfc = lfc[pca_gene_order, :]  # (D, L)
+    mat = lfc.T  # (L, D)
+    ordered_gene_names = [gene_names[i] for i in pca_gene_order]
+
+    # Symmetric color scale
+    abs_max = np.nanmax(np.abs(mat))
+    abs_max = max(abs_max, 0.1)
+
+    if figsize is None:
+        fig_w = max(12, D * 0.12)
+        fig_h = max(3, L * 0.5 + 1.5)
+        figsize = (fig_w, fig_h)
+
+    fig, ax = plt.subplots(figsize=figsize)
+    im = ax.imshow(mat, aspect="auto", cmap="bwr", vmin=-abs_max, vmax=abs_max)
+
+    ax.set_yticks(np.arange(L))
+    ax.set_yticklabels([f"Factor {l + 1}" for l in range(L)], fontsize=9)
+    ax.set_xticks(np.arange(D))
+    ax.set_xticklabels(ordered_gene_names, fontsize=6, rotation=90)
+    ax.set_xlabel("Genes (ordered by PC1 of cell-type LFC)", fontsize=10)
+    ax.set_ylabel("Factor", fontsize=10)
+    group_name = group_names[g] if g < len(group_names) else f"Group {g}"
+    ax.set_title(f"{group_name} — Factor loadings", fontsize=11)
+
+    cbar = fig.colorbar(im, ax=ax, shrink=0.7)
+    cbar.set_label("log2(group / global)", fontsize=9)
 
     fig.tight_layout()
     return fig
@@ -1093,6 +1266,166 @@ def plot_groupwise_factors(
     return fig
 
 
+def plot_celltype_summary(
+    factors: np.ndarray,
+    groupwise_factors: dict,
+    Y: np.ndarray,
+    coords: np.ndarray,
+    groups: np.ndarray,
+    group_id: int,
+    group_name: str,
+    gene_names: List[str],
+    gene_enrichment: dict,
+    n_top: int = 3,
+    s: float = 0.5,
+    panel_size: float = 2.5,
+    cmap_factors: str = "turbo",
+    cmap_genes: str = "turbo",
+) -> plt.Figure:
+    """Per-cell-type summary: global factors, conditional factors, top/bottom enriched genes.
+
+    Layout: (2 + 2*n_top) rows × (L+1) cols  [default: 8 rows with n_top=3]
+    - Row 0:          [empty]        [Factor 1] ... [Factor L]   — global factors
+    - Row 1:          [cell density] [cond F1]  ... [cond FL]    — conditional factors
+    - Rows 2..n_top+1:   [label]     [top-k gene for F1] ...     — top enriched genes per factor
+    - Rows n_top+2..end: [label]     [bot-k gene for F1] ...     — top depleted genes per factor
+
+    Gene panels show log1p(Y[:, gene_idx]) spatial expression.
+    Genes come from gene_enrichment.json top_enriched / top_depleted for this cell type.
+
+    Args:
+        factors:           (N, L) global factor means
+        groupwise_factors: {g: (N, L)} conditional factor means (MGGP models)
+        Y:                 (N, D) gene expression (raw counts)
+        coords:            (N, 2) spatial coordinates
+        groups:            (N,) integer group codes
+        group_id:          cell type integer key into groupwise_factors
+        group_name:        display name for this cell type
+        gene_names:        list of D gene names
+        gene_enrichment:   dict from gene_enrichment.json with per-factor/group LFC data
+        n_top:             number of top/bottom genes per factor (default 3 → 8 rows total)
+        s:                 scatter point size
+        panel_size:        inches per panel
+        cmap_factors:      colormap for factor panels
+        cmap_genes:        colormap for gene expression panels
+    """
+    N, L = factors.shape
+    n_rows = 2 + 2 * n_top
+    n_cols = L + 1
+
+    vmin_f = 0.0
+    vmax_f = float(np.percentile(factors, 99))
+
+    fig, axes = plt.subplots(
+        n_rows, n_cols,
+        figsize=(n_cols * panel_size, n_rows * panel_size),
+        squeeze=False,
+    )
+
+    # Turn off all panels upfront; enable selectively below
+    for r in range(n_rows):
+        for c in range(n_cols):
+            axes[r, c].set_visible(False)
+
+    def _scatter(ax, values, vmin, vmax, cmap, title=None):
+        ax.set_visible(True)
+        sc = ax.scatter(
+            coords[:, 0], coords[:, 1], c=values,
+            vmin=vmin, vmax=vmax, cmap=cmap,
+            s=s, alpha=0.8, edgecolors="none", rasterized=True,
+        )
+        ax.invert_yaxis()
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.set_facecolor("gray")
+        if title:
+            txt = ax.text(
+                0.03, 0.95, title,
+                transform=ax.transAxes,
+                fontsize=11, color="white",
+                ha="left", va="top",
+            )
+            txt.set_path_effects([
+                path_effects.Stroke(linewidth=2, foreground="black"),
+                path_effects.Normal(),
+            ])
+        return sc
+
+    def _label_panel(ax, label):
+        ax.set_visible(True)
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.set_facecolor("white")
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+        ax.set_ylabel(label, rotation=0, fontsize=8, labelpad=50,
+                      ha="right", va="center")
+
+    # Row 0: global factors
+    axes[0, 0].set_visible(False)
+    for l in range(L):
+        _scatter(axes[0, l + 1], factors[:, l], vmin_f, vmax_f, cmap_factors,
+                 title=f"Factor {l + 1}")
+
+    # Row 1: cell density + conditional factors
+    _draw_group_loc_panel(axes[1, 0], coords, groups, group_id, s=s)
+    axes[1, 0].set_visible(True)
+    display_name = " ".join(group_name.split("_")[:2])
+    axes[1, 0].set_ylabel(display_name, rotation=0, fontsize=8, labelpad=50,
+                          ha="right", va="center")
+    factors_g = groupwise_factors.get(group_id)
+    for l in range(L):
+        ax = axes[1, l + 1]
+        if factors_g is not None:
+            _scatter(ax, factors_g[:, l], vmin_f, vmax_f, cmap_factors)
+        else:
+            ax.set_visible(True)
+            ax.set_facecolor("gray")
+            ax.set_xticks([])
+            ax.set_yticks([])
+
+    # Rows 2..(n_top+1): top enriched; Rows (n_top+2)..(2*n_top+1): top depleted
+    gene_name_to_idx = {g: i for i, g in enumerate(gene_names)}
+
+    for kind_idx, kind in enumerate(["top_enriched", "top_depleted"]):
+        row_offset = 2 + kind_idx * n_top
+        for rank in range(n_top):
+            r = row_offset + rank
+            label = f"Enriched {rank + 1}" if kind == "top_enriched" else f"Depleted {rank + 1}"
+            _label_panel(axes[r, 0], label)
+            for l in range(L):
+                factor_key = f"factor_{l}"
+                group_data = gene_enrichment["factors"].get(factor_key, {}).get("groups", {}).get(group_name)
+                if group_data is None:
+                    continue
+                entries = group_data.get(kind, [])
+                if rank >= len(entries):
+                    continue
+                gene = entries[rank]["gene"]
+                gene_idx = gene_name_to_idx.get(gene)
+                if gene_idx is None:
+                    continue
+                expr = np.log1p(Y[:, gene_idx].astype(float))
+                vmax_g = float(np.percentile(expr, 99)) or 1.0
+                _scatter(axes[r, l + 1], expr, 0.0, vmax_g, cmap_genes, title=gene)
+
+    fig.suptitle(f"{group_name} — factors & top/bottom enriched genes",
+                 fontsize=10, y=1.005)
+    fig.tight_layout(rect=[0, 0, 0.93, 1], pad=0.3)
+
+    # Single reference colorbar for gene expression (turbo, no tick values)
+    import matplotlib.cm as _cm
+    import matplotlib.colors as _mcolors
+    sm = _cm.ScalarMappable(cmap=cmap_genes, norm=_mcolors.Normalize(vmin=0, vmax=1))
+    sm.set_array([])
+    cbar_ax = fig.add_axes([0.94, 0.05, 0.012, 0.4])
+    cb = fig.colorbar(sm, cax=cbar_ax, ticks=[])
+    cb.set_label("gene expression\n(log1p)", fontsize=9, labelpad=8)
+    cb.outline.set_linewidth(0.5)
+
+    return fig
+
+
 def plot_groupwise_factors_3d(
     factors: np.ndarray,
     groupwise_factors: dict,
@@ -1291,6 +1624,7 @@ def run(config_path: str):
         factors_with_genes.png    - Factors + top gene expression (spatial, like GPzoo)
         gene_enrichment.png       - LFC heatmap (group vs global loadings)
         enrichment_factor_{i}.png - Top enriched genes per group for each factor
+        celltype_gene_loadings_factor_{i}.png - Cell-type x genes heatmap per factor (genes ordered by PCA)
     """
     config = Config.from_yaml(config_path)
     output_dir = Path(config.output_dir)
@@ -1473,6 +1807,48 @@ def run(config_path: str):
             plt.close(fig)
             print(f"  Saved: {figures_dir}/enrichment_factor_{factor_idx + 1}.png")
 
+    # 5c. Cell-type x genes heatmaps (one per factor, genes ordered by PCA)
+    pca_gene_order = results.get("pca_gene_order")
+    if group_loadings and pca_gene_order is not None:
+        L = next(iter(group_loadings.values())).shape[1]
+        celltype_dir = figures_dir / "celltype_gene_loadings"
+        celltype_dir.mkdir(exist_ok=True)
+        print(f"Generating cell-type x gene loading heatmaps ({L} factors)...")
+        for factor_idx in range(L):
+            fig = plot_celltype_gene_loadings(
+                group_loadings, group_names, gene_names, factor_idx, pca_gene_order[factor_idx],
+                global_loadings=loadings,
+            )
+            fig.savefig(
+                celltype_dir / f"factor_{factor_idx + 1}.png",
+                dpi=150, bbox_inches="tight",
+            )
+            plt.close(fig)
+        print(f"  Saved: {celltype_dir}/factor_*.png ({L} files)")
+
+    # 5d. Factor x genes heatmaps (one per cell type, genes ordered by per-celltype PCA)
+    pca_gene_order_by_celltype = results.get("pca_gene_order_by_celltype")
+    if group_loadings and pca_gene_order_by_celltype is not None:
+        sorted_group_ids = sorted(group_loadings.keys())
+        G_ct = len(sorted_group_ids)
+        factor_gene_dir = figures_dir / "factor_gene_loadings"
+        factor_gene_dir.mkdir(exist_ok=True)
+        print(f"Generating factor x gene loading heatmaps ({G_ct} cell types)...")
+        for group_idx, g in enumerate(sorted_group_ids):
+            group_name = group_names[g] if g < len(group_names) else f"group_{g}"
+            safe_name = group_name.replace(" ", "_").replace("/", "-")
+            fig = plot_factor_gene_loadings(
+                group_loadings, group_names, gene_names, group_idx,
+                pca_gene_order_by_celltype[group_idx],
+                global_loadings=loadings,
+            )
+            fig.savefig(
+                factor_gene_dir / f"celltype_{safe_name}.png",
+                dpi=150, bbox_inches="tight",
+            )
+            plt.close(fig)
+        print(f"  Saved: {factor_gene_dir}/celltype_*.png ({G_ct} files)")
+
     # 6. Groupwise conditional posterior figures (MGGP models only)
     groupwise_factors = results.get("groupwise_factors")
     if groupwise_factors is not None and data.groups is not None:
@@ -1499,6 +1875,34 @@ def run(config_path: str):
             fig.savefig(figures_dir / "groupwise_factors_3d.png", dpi=150, bbox_inches="tight")
             plt.close(fig)
             print(f"  Saved: {figures_dir}/groupwise_factors_3d.png")
+
+        # 7. Per-cell-type summary: factors + conditional factors + top/bottom enriched genes
+        if gene_enrichment is not None and gene_names is not None:
+            # Load Y (raw counts) for gene expression panels
+            Y_ct = data.Y.numpy()
+            if Y_ct.shape[0] != factors.shape[0]:
+                Y_ct = Y_ct.T  # ensure (N, D)
+
+            sorted_group_ids = sorted(groupwise_factors.keys())
+            celltype_summary_dir = figures_dir / "celltype_summary"
+            celltype_summary_dir.mkdir(exist_ok=True)
+            print(f"Generating per-cell-type summary figures ({len(sorted_group_ids)} cell types)...")
+            for g in sorted_group_ids:
+                gname = group_names[g] if g < len(group_names) else f"group_{g}"
+                safe_name = gname.replace(" ", "_").replace("/", "-")
+                fig = plot_celltype_summary(
+                    factors, groupwise_factors, Y_ct, coords, groups_np,
+                    group_id=g, group_name=gname,
+                    gene_names=gene_names,
+                    gene_enrichment=gene_enrichment,
+                    s=s,
+                )
+                fig.savefig(
+                    celltype_summary_dir / f"celltype_{safe_name}.png",
+                    dpi=150, bbox_inches="tight",
+                )
+                plt.close(fig)
+            print(f"  Saved: {celltype_summary_dir}/celltype_*.png ({len(sorted_group_ids)} files)")
 
     # Training animation GIF (only if video frames were captured during training)
     video_frames_path = model_dir / "video_frames.npy"

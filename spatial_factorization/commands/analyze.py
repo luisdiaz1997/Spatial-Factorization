@@ -463,20 +463,23 @@ def _compute_group_loadings(
 
 
 def _normalize_loadings(loadings: np.ndarray) -> np.ndarray:
-    """Normalize loadings per factor to sum to 1 (like softmax over genes).
+    """Normalize loadings per gene across factors (row normalization).
 
-    This converts loadings to relative proportions, allowing comparison
-    between global and group-specific loadings that have different scales.
+    For each gene d, divides its loading vector by the sum across all factors:
+        loadings_norm[d, l] = loadings[d, l] / Σ_{l'} loadings[d, l']
+
+    This captures each gene's *relative allocation* across factors, making
+    enrichment comparisons (Wc_norm / W_norm) scale-invariant per gene.
 
     Args:
         loadings: (D, L) loadings matrix
 
     Returns:
-        Normalized loadings where each column sums to 1
+        Normalized loadings where each row (gene) sums to 1
     """
     eps = 1e-10
     loadings_pos = np.maximum(loadings, eps)
-    return loadings_pos / loadings_pos.sum(axis=0, keepdims=True)
+    return loadings_pos / loadings_pos.sum(axis=1, keepdims=True)
 
 
 def _compute_gene_enrichment(
@@ -488,11 +491,14 @@ def _compute_gene_enrichment(
     """Compute relative gene enrichment per factor by cell-type.
 
     For each factor and group, computes relative enrichment by:
-    1. Normalizing loadings per factor (so they sum to 1 across genes)
-    2. Computing log-fold change: log2(group_normalized / global_normalized)
+    1. Normalizing loadings per gene across factors (each gene's row sums to 1):
+           Wc_norm[d, l] = Wc[d, l] / Σ_{l'} Wc[d, l']
+           W_norm[d, l]  = W[d, l]  / Σ_{l'} W[d, l']
+    2. Computing log-fold change: log2(Wc_norm / W_norm)
 
-    This normalization is critical because group-specific loadings are fit
-    independently and have different scales than global loadings.
+    Row normalization makes each gene scale-invariant: we compare how a gene
+    *allocates* its loading across factors in group c vs globally, ignoring
+    the overall magnitude. This is robust to W being sparser than Wc.
 
     Interpretation:
     - Positive LFC → gene has higher relative weight in this cell type
@@ -797,6 +803,45 @@ def run(config_path: str):
         with open(model_dir / "gene_enrichment.json", "w") as f:
             json.dump(gene_enrichment, f, indent=2)
         print(f"  Saved gene enrichment for {gene_enrichment['n_factors']} factors x {gene_enrichment['n_groups']} groups")
+
+        # Compute PCA gene order per factor: for each factor, stack LFC across groups (D, G),
+        # run PCA, order genes by PC1. Result shape: (L, D).
+        print("\nComputing PCA gene ordering (per factor)...")
+        from sklearn.decomposition import PCA
+        D, L = model.components_.T.shape
+        eps = 1e-10
+        # Normalize global loadings per gene across factors
+        global_raw = np.maximum(model.components_.T, eps)  # (D, L)
+        global_norm = global_raw / global_raw.sum(axis=1, keepdims=True)
+        # Precompute per-group normalized LFC arrays
+        sorted_groups = sorted(group_loadings_result["loadings"])
+        lfc_by_group = []
+        for g in sorted_groups:
+            grp_raw = np.maximum(group_loadings_result["loadings"][g], eps)  # (D, L)
+            grp_norm = grp_raw / grp_raw.sum(axis=1, keepdims=True)
+            lfc_by_group.append(np.log2(grp_norm / global_norm))  # (D, L)
+        pca = PCA(n_components=1)
+        pca_gene_order = np.zeros((L, D), dtype=int)
+        for l in range(L):
+            # Stack across groups for this factor: (D, G)
+            factor_lfc = np.stack([lfc[:, l] for lfc in lfc_by_group], axis=1)
+            pca.fit(factor_lfc)
+            pc1_scores = pca.transform(factor_lfc)[:, 0]  # (D,)
+            pca_gene_order[l] = np.argsort(pc1_scores)[::-1]
+        np.save(model_dir / "pca_gene_order.npy", pca_gene_order)
+        print(f"  Saved pca_gene_order.npy ({L} factors x {D} genes, per-factor PC1 ordering)")
+
+        # Compute PCA gene order per cell type: for each group, use LFC (D, L),
+        # run PCA, order genes by PC1. Result shape: (G, D).
+        G = len(sorted_groups)
+        pca_gene_order_by_celltype = np.zeros((G, D), dtype=int)
+        for i, lfc in enumerate(lfc_by_group):
+            # lfc is (D, L) — genes as samples, factors as features
+            pca.fit(lfc)
+            pc1_scores = pca.transform(lfc)[:, 0]  # (D,)
+            pca_gene_order_by_celltype[i] = np.argsort(pc1_scores)[::-1]
+        np.save(model_dir / "pca_gene_order_by_celltype.npy", pca_gene_order_by_celltype)
+        print(f"  Saved pca_gene_order_by_celltype.npy ({G} cell types x {D} genes, per-celltype PC1 ordering)")
 
     # Save Moran's I results
     moran_df = pd.DataFrame({

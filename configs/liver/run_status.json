@@ -1,7 +1,7 @@
 {
-  "start_time": "2026-03-04T19:57:48.496227",
-  "end_time": "2026-03-06T15:58:42.886380",
-  "elapsed_seconds": 158454.390153,
+  "start_time": "2026-03-23T22:46:29.763350",
+  "end_time": "2026-03-24T00:46:50.542653",
+  "elapsed_seconds": 7220.779303,
   "jobs": {
     "liver_test_healthy_pnmf": {
       "config_path": "configs/liver/healthy/pnmf.yaml",
@@ -281,277 +281,277 @@
     "liver_healthy_pnmf": {
       "config_path": "configs/liver/healthy/pnmf.yaml",
       "status": "completed",
-      "elapsed": 152.046462059021
+      "elapsed": 0.0
     },
     "liver_healthy_svgp": {
       "config_path": "configs/liver/healthy/svgp.yaml",
       "status": "completed",
-      "elapsed": 8865.32784986496
+      "elapsed": 0.0
     },
     "liver_healthy_mggp_svgp": {
       "config_path": "configs/liver/healthy/mggp_svgp.yaml",
       "status": "completed",
-      "elapsed": 41242.28515815735
+      "elapsed": 0.0
     },
     "liver_healthy_lcgp": {
       "config_path": "configs/liver/healthy/lcgp.yaml",
       "status": "completed",
-      "elapsed": 5275.98912191391
+      "elapsed": 0.0
     },
     "liver_healthy_mggp_lcgp": {
       "config_path": "configs/liver/healthy/mggp_lcgp.yaml",
       "status": "completed",
-      "elapsed": 5455.572529792786
+      "elapsed": 0.0
     },
     "liver_diseased_pnmf": {
       "config_path": "configs/liver/diseased/pnmf.yaml",
       "status": "completed",
-      "elapsed": 410.1327660083771
+      "elapsed": 0.0
     },
     "liver_diseased_svgp": {
       "config_path": "configs/liver/diseased/svgp.yaml",
       "status": "completed",
-      "elapsed": 7823.308610200882
+      "elapsed": 0.0
     },
     "liver_diseased_mggp_svgp": {
       "config_path": "configs/liver/diseased/mggp_svgp.yaml",
       "status": "completed",
-      "elapsed": 9861.753776311874
+      "elapsed": 0.0
     },
     "liver_diseased_lcgp": {
       "config_path": "configs/liver/diseased/lcgp.yaml",
       "status": "completed",
-      "elapsed": 3536.8281121253967
+      "elapsed": 0.0
     },
     "liver_diseased_mggp_lcgp": {
       "config_path": "configs/liver/diseased/mggp_lcgp.yaml",
       "status": "completed",
-      "elapsed": 6011.123970508575
+      "elapsed": 0.0
     },
     "liver_diseased_AM031_pnmf": {
       "config_path": "configs/liver/diseased/AM031/pnmf.yaml",
       "status": "completed",
-      "elapsed": 160.55430388450623
+      "elapsed": 0.0
     },
     "liver_diseased_AM031_svgp": {
       "config_path": "configs/liver/diseased/AM031/svgp.yaml",
       "status": "completed",
-      "elapsed": 6075.616778612137
+      "elapsed": 0.0
     },
     "liver_diseased_AM031_mggp_svgp": {
       "config_path": "configs/liver/diseased/AM031/mggp_svgp.yaml",
       "status": "completed",
-      "elapsed": 8986.099742174149
+      "elapsed": 0.0
     },
     "liver_diseased_AM031_lcgp": {
       "config_path": "configs/liver/diseased/AM031/lcgp.yaml",
       "status": "completed",
-      "elapsed": 5171.720841884613
+      "elapsed": 0.0
     },
     "liver_diseased_AM031_mggp_lcgp": {
       "config_path": "configs/liver/diseased/AM031/mggp_lcgp.yaml",
       "status": "completed",
-      "elapsed": 5310.626115322113
+      "elapsed": 0.0
     },
     "liver_diseased_AM042_pnmf": {
       "config_path": "configs/liver/diseased/AM042/pnmf.yaml",
       "status": "completed",
-      "elapsed": 124.61394333839417
+      "elapsed": 0.0
     },
     "liver_diseased_AM042_svgp": {
       "config_path": "configs/liver/diseased/AM042/svgp.yaml",
       "status": "completed",
-      "elapsed": 8726.901304483414
+      "elapsed": 0.0
     },
     "liver_diseased_AM042_mggp_svgp": {
       "config_path": "configs/liver/diseased/AM042/mggp_svgp.yaml",
       "status": "completed",
-      "elapsed": 9004.589140892029
+      "elapsed": 0.0
     },
     "liver_diseased_AM042_lcgp": {
       "config_path": "configs/liver/diseased/AM042/lcgp.yaml",
       "status": "completed",
-      "elapsed": 75415.32447361946
+      "elapsed": 0.0
     },
     "liver_diseased_AM042_mggp_lcgp": {
       "config_path": "configs/liver/diseased/AM042/mggp_lcgp.yaml",
       "status": "completed",
-      "elapsed": 5007.11736869812
+      "elapsed": 0.0
     },
     "liver_diseased_AM048_pnmf": {
       "config_path": "configs/liver/diseased/AM048/pnmf.yaml",
       "status": "completed",
-      "elapsed": 110.68423128128052
+      "elapsed": 0.0
     },
     "liver_diseased_AM048_svgp": {
       "config_path": "configs/liver/diseased/AM048/svgp.yaml",
       "status": "completed",
-      "elapsed": 8850.233103752136
+      "elapsed": 0.0
     },
     "liver_diseased_AM048_mggp_svgp": {
       "config_path": "configs/liver/diseased/AM048/mggp_svgp.yaml",
       "status": "completed",
-      "elapsed": 8869.155560970306
+      "elapsed": 0.0
     },
     "liver_diseased_AM048_lcgp": {
       "config_path": "configs/liver/diseased/AM048/lcgp.yaml",
       "status": "completed",
-      "elapsed": 4946.83340215683
+      "elapsed": 0.0
     },
     "liver_diseased_AM048_mggp_lcgp": {
       "config_path": "configs/liver/diseased/AM048/mggp_lcgp.yaml",
       "status": "completed",
-      "elapsed": 5008.265406131744
+      "elapsed": 0.0
     },
     "liver_diseased_AM061_pnmf": {
       "config_path": "configs/liver/diseased/AM061/pnmf.yaml",
       "status": "completed",
-      "elapsed": 100.54693794250488
+      "elapsed": 0.0
     },
     "liver_diseased_AM061_svgp": {
       "config_path": "configs/liver/diseased/AM061/svgp.yaml",
       "status": "completed",
-      "elapsed": 8823.298611164093
+      "elapsed": 0.0
     },
     "liver_diseased_AM061_mggp_svgp": {
       "config_path": "configs/liver/diseased/AM061/mggp_svgp.yaml",
       "status": "completed",
-      "elapsed": 8858.362045526505
+      "elapsed": 0.0
     },
     "liver_diseased_AM061_lcgp": {
       "config_path": "configs/liver/diseased/AM061/lcgp.yaml",
       "status": "completed",
-      "elapsed": 4965.805897951126
+      "elapsed": 0.0
     },
     "liver_diseased_AM061_mggp_lcgp": {
       "config_path": "configs/liver/diseased/AM061/mggp_lcgp.yaml",
       "status": "completed",
-      "elapsed": 5010.563492774963
+      "elapsed": 0.0
     },
     "liver_diseased_AM062_pnmf": {
       "config_path": "configs/liver/diseased/AM062/pnmf.yaml",
       "status": "completed",
-      "elapsed": 136.11056780815125
+      "elapsed": 0.0
     },
     "liver_diseased_AM062_svgp": {
       "config_path": "configs/liver/diseased/AM062/svgp.yaml",
       "status": "completed",
-      "elapsed": 8925.415043830872
+      "elapsed": 0.0
     },
     "liver_diseased_AM062_mggp_svgp": {
       "config_path": "configs/liver/diseased/AM062/mggp_svgp.yaml",
       "status": "completed",
-      "elapsed": 8971.080537319183
+      "elapsed": 0.0
     },
     "liver_diseased_AM062_lcgp": {
       "config_path": "configs/liver/diseased/AM062/lcgp.yaml",
       "status": "completed",
-      "elapsed": 5060.700992822647
+      "elapsed": 0.0
     },
     "liver_diseased_AM062_mggp_lcgp": {
       "config_path": "configs/liver/diseased/AM062/mggp_lcgp.yaml",
       "status": "completed",
-      "elapsed": 5123.6873598098755
+      "elapsed": 0.0
     },
     "liver_diseased_AM072_pnmf": {
       "config_path": "configs/liver/diseased/AM072/pnmf.yaml",
       "status": "completed",
-      "elapsed": 154.2248272895813
+      "elapsed": 0.0
     },
     "liver_diseased_AM072_svgp": {
       "config_path": "configs/liver/diseased/AM072/svgp.yaml",
       "status": "completed",
-      "elapsed": 8966.704981327057
+      "elapsed": 0.0
     },
     "liver_diseased_AM072_mggp_svgp": {
       "config_path": "configs/liver/diseased/AM072/mggp_svgp.yaml",
       "status": "completed",
-      "elapsed": 9016.798167943954
+      "elapsed": 0.0
     },
     "liver_diseased_AM072_lcgp": {
       "config_path": "configs/liver/diseased/AM072/lcgp.yaml",
       "status": "completed",
-      "elapsed": 5124.85665345192
+      "elapsed": 0.0
     },
     "liver_diseased_AM072_mggp_lcgp": {
       "config_path": "configs/liver/diseased/AM072/mggp_lcgp.yaml",
       "status": "completed",
-      "elapsed": 5179.907915115356
+      "elapsed": 0.0
     },
     "liver_healthy_AM042_pnmf": {
       "config_path": "configs/liver/healthy/AM042/pnmf.yaml",
       "status": "completed",
-      "elapsed": 105.49116230010986
+      "elapsed": 0.0
     },
     "liver_healthy_AM042_svgp": {
       "config_path": "configs/liver/healthy/AM042/svgp.yaml",
       "status": "completed",
-      "elapsed": 8841.88757944107
+      "elapsed": 0.0
     },
     "liver_healthy_AM042_mggp_svgp": {
       "config_path": "configs/liver/healthy/AM042/mggp_svgp.yaml",
       "status": "completed",
-      "elapsed": 8942.522064447403
+      "elapsed": 0.0
     },
     "liver_healthy_AM042_lcgp": {
       "config_path": "configs/liver/healthy/AM042/lcgp.yaml",
       "status": "completed",
-      "elapsed": 4985.667351007462
+      "elapsed": 0.0
     },
     "liver_healthy_AM042_mggp_lcgp": {
       "config_path": "configs/liver/healthy/AM042/mggp_lcgp.yaml",
       "status": "completed",
-      "elapsed": 5130.98300242424
+      "elapsed": 0.0
     },
     "liver_healthy_AM048_pnmf": {
       "config_path": "configs/liver/healthy/AM048/pnmf.yaml",
       "status": "completed",
-      "elapsed": 99.68998718261719
+      "elapsed": 0.0
     },
     "liver_healthy_AM048_svgp": {
       "config_path": "configs/liver/healthy/AM048/svgp.yaml",
       "status": "completed",
-      "elapsed": 41691.82624101639
+      "elapsed": 0.0
     },
     "liver_healthy_AM048_mggp_svgp": {
       "config_path": "configs/liver/healthy/AM048/mggp_svgp.yaml",
       "status": "completed",
-      "elapsed": 9028.426723957062
+      "elapsed": 0.0
     },
     "liver_healthy_AM048_lcgp": {
       "config_path": "configs/liver/healthy/AM048/lcgp.yaml",
       "status": "completed",
-      "elapsed": 5003.663411617279
+      "elapsed": 0.0
     },
     "liver_healthy_AM048_mggp_lcgp": {
       "config_path": "configs/liver/healthy/AM048/mggp_lcgp.yaml",
       "status": "completed",
-      "elapsed": 5153.034818887711
+      "elapsed": 0.0
     },
     "liver_healthy_AM061_pnmf": {
       "config_path": "configs/liver/healthy/AM061/pnmf.yaml",
       "status": "completed",
-      "elapsed": 122.34905052185059
+      "elapsed": 0.0
     },
     "liver_healthy_AM061_svgp": {
       "config_path": "configs/liver/healthy/AM061/svgp.yaml",
       "status": "completed",
-      "elapsed": 8815.828398942947
+      "elapsed": 0.0
     },
     "liver_healthy_AM061_mggp_svgp": {
       "config_path": "configs/liver/healthy/AM061/mggp_svgp.yaml",
       "status": "completed",
-      "elapsed": 8924.22694349289
+      "elapsed": 0.0
     },
     "liver_healthy_AM061_lcgp": {
       "config_path": "configs/liver/healthy/AM061/lcgp.yaml",
       "status": "completed",
-      "elapsed": 5068.269028663635
+      "elapsed": 0.0
     },
     "liver_healthy_AM061_mggp_lcgp": {
       "config_path": "configs/liver/healthy/AM061/mggp_lcgp.yaml",
       "status": "completed",
-      "elapsed": 5582.18269777298
+      "elapsed": 0.0
     }
   }
 }
