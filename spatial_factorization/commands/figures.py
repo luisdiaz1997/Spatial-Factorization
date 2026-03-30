@@ -1426,6 +1426,155 @@ def plot_celltype_summary(
     return fig
 
 
+def plot_celltype_summary_loadings(
+    factors: np.ndarray,
+    groupwise_factors: dict,
+    Y: np.ndarray,
+    coords: np.ndarray,
+    groups: np.ndarray,
+    group_id: int,
+    group_name: str,
+    gene_names: List[str],
+    group_loadings: dict,
+    n_top: int = 5,
+    s: float = 0.5,
+    panel_size: float = 2.5,
+    cmap_factors: str = "turbo",
+    cmap_genes: str = "turbo",
+) -> plt.Figure:
+    """Same layout as plot_celltype_summary but genes ranked by normedW_c directly.
+
+    For each factor l, top genes are those with the highest normalized loading
+    for this cell type: normedW_c[:, l] (row-normalized W_c, no division by global).
+
+    Layout: (2 + n_top) rows × (L+1) cols
+    - Row 0:              [empty]        [Factor 1] ... [Factor L]
+    - Row 1:              [cell density] [cond F1]  ... [cond FL]
+    - Rows 2..n_top+1:   [label]        [top gene for F1] ...
+    - Rows n_top+2..end: [label]        [bot gene for F1] ...
+
+    Args:
+        factors:        (N, L) global factor means
+        groupwise_factors: {g: (N, L)} conditional factor means
+        Y:              (N, D) gene expression (raw counts)
+        coords:         (N, 2) spatial coordinates
+        groups:         (N,) integer group codes
+        group_id:       cell type integer key
+        group_name:     display name
+        gene_names:     list of D gene names
+        group_loadings: dict {group_id: (D, L)} raw group-specific loadings
+        n_top:          number of top/bottom genes per factor (default 3)
+        s:              scatter point size
+        panel_size:     inches per panel
+        cmap_factors:   colormap for factor panels
+        cmap_genes:     colormap for gene expression panels
+    """
+    eps = 1e-10
+    N, L = factors.shape
+    n_rows = 2 + n_top
+    n_cols = L + 1
+
+    # Row-normalize group loadings for this cell type
+    grp_W = np.maximum(group_loadings[group_id], eps)   # (D, L)
+    grp_norm = grp_W / grp_W.sum(axis=1, keepdims=True)  # (D, L)
+
+    vmin_f = 0.0
+    vmax_f = float(np.percentile(factors, 99))
+
+    fig, axes = plt.subplots(
+        n_rows, n_cols,
+        figsize=(n_cols * panel_size, n_rows * panel_size),
+        squeeze=False,
+    )
+
+    for r in range(n_rows):
+        for c in range(n_cols):
+            axes[r, c].set_visible(False)
+
+    def _scatter(ax, values, vmin, vmax, cmap, title=None):
+        ax.set_visible(True)
+        ax.scatter(
+            coords[:, 0], coords[:, 1], c=values,
+            vmin=vmin, vmax=vmax, cmap=cmap,
+            s=s, alpha=0.8, edgecolors="none", rasterized=True,
+        )
+        ax.invert_yaxis()
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.set_facecolor("gray")
+        if title:
+            txt = ax.text(
+                0.03, 0.95, title,
+                transform=ax.transAxes,
+                fontsize=11, color="white",
+                ha="left", va="top",
+            )
+            txt.set_path_effects([
+                path_effects.Stroke(linewidth=2, foreground="black"),
+                path_effects.Normal(),
+            ])
+
+    def _label_panel(ax, label):
+        ax.set_visible(True)
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.set_facecolor("white")
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+        ax.set_ylabel(label, rotation=0, fontsize=8, labelpad=50,
+                      ha="right", va="center")
+
+    # Row 0: global factors
+    axes[0, 0].set_visible(False)
+    for l in range(L):
+        _scatter(axes[0, l + 1], factors[:, l], vmin_f, vmax_f, cmap_factors,
+                 title=f"Factor {l + 1}")
+
+    # Row 1: cell density + conditional factors
+    axes[1, 0].set_visible(True)
+    _draw_group_loc_panel(axes[1, 0], coords, groups, group_id, s=s)
+    display_name = " ".join(group_name.split("_")[:2])
+    axes[1, 0].set_ylabel(display_name, rotation=0, fontsize=8, labelpad=50,
+                          ha="right", va="center")
+    factors_g = groupwise_factors.get(group_id)
+    for l in range(L):
+        ax = axes[1, l + 1]
+        if factors_g is not None:
+            _scatter(ax, factors_g[:, l], vmin_f, vmax_f, cmap_factors)
+        else:
+            ax.set_visible(True)
+            ax.set_facecolor("gray")
+            ax.set_xticks([])
+            ax.set_yticks([])
+
+    # Rows 2..end: top genes by normedW_c per factor
+    for rank in range(n_top):
+        r = 2 + rank
+        _label_panel(axes[r, 0], f"Top {rank + 1}")
+        for l in range(L):
+            order = np.argsort(grp_norm[:, l])[::-1]
+            gene_idx = order[rank]
+            expr = np.log1p(Y[:, gene_idx].astype(float))
+            vmax_g = float(np.percentile(expr, 99)) or 1.0
+            _scatter(axes[r, l + 1], expr, 0.0, vmax_g, cmap_genes,
+                     title=gene_names[gene_idx])
+
+    fig.suptitle(f"{group_name} — factors & top W_c genes",
+                 fontsize=10, y=1.005)
+    fig.tight_layout(rect=[0, 0, 0.93, 1], pad=0.3)
+
+    import matplotlib.cm as _cm
+    import matplotlib.colors as _mcolors
+    sm = _cm.ScalarMappable(cmap=cmap_genes, norm=_mcolors.Normalize(vmin=0, vmax=1))
+    sm.set_array([])
+    cbar_ax = fig.add_axes([0.94, 0.05, 0.012, 0.4])
+    cb = fig.colorbar(sm, cax=cbar_ax, ticks=[])
+    cb.set_label("gene expression\n(log1p)", fontsize=9, labelpad=8)
+    cb.outline.set_linewidth(0.5)
+
+    return fig
+
+
 def plot_groupwise_factors_3d(
     factors: np.ndarray,
     groupwise_factors: dict,
@@ -1903,6 +2052,32 @@ def run(config_path: str):
                 )
                 plt.close(fig)
             print(f"  Saved: {celltype_summary_dir}/celltype_*.png ({len(sorted_group_ids)} files)")
+
+        # 8. Per-cell-type summary: top/bottom genes by normedW_c (no enrichment ratio)
+        if group_loadings is not None and gene_names is not None:
+            Y_wc = data.Y.numpy()
+            if Y_wc.shape[0] != factors.shape[0]:
+                Y_wc = Y_wc.T
+            sorted_group_ids = sorted(groupwise_factors.keys())
+            celltype_summary_wc_dir = figures_dir / "celltype_summary_Wc"
+            celltype_summary_wc_dir.mkdir(exist_ok=True)
+            print(f"Generating per-cell-type Wc summary figures ({len(sorted_group_ids)} cell types)...")
+            for g in sorted_group_ids:
+                gname = group_names[g] if g < len(group_names) else f"group_{g}"
+                safe_name = gname.replace(" ", "_").replace("/", "-")
+                fig = plot_celltype_summary_loadings(
+                    factors, groupwise_factors, Y_wc, coords, groups_np,
+                    group_id=g, group_name=gname,
+                    gene_names=gene_names,
+                    group_loadings=group_loadings,
+                    s=s,
+                )
+                fig.savefig(
+                    celltype_summary_wc_dir / f"celltype_{safe_name}.png",
+                    dpi=150, bbox_inches="tight",
+                )
+                plt.close(fig)
+            print(f"  Saved: {celltype_summary_wc_dir}/celltype_*.png ({len(sorted_group_ids)} files)")
 
     # Training animation GIF (only if video frames were captured during training)
     video_frames_path = model_dir / "video_frames.npy"

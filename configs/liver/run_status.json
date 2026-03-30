@@ -1,7 +1,7 @@
 {
-  "start_time": "2026-03-23T22:46:29.763350",
-  "end_time": "2026-03-24T00:46:50.542653",
-  "elapsed_seconds": 7220.779303,
+  "start_time": "2026-03-24T17:49:07.830773",
+  "end_time": "2026-03-24T18:42:19.289821",
+  "elapsed_seconds": 3191.459048,
   "jobs": {
     "liver_test_healthy_pnmf": {
       "config_path": "configs/liver/healthy/pnmf.yaml",
