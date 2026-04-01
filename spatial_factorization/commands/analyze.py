@@ -101,7 +101,7 @@ def _load_model(model_dir: Path):
             is_multigroup = hyperparams.get("multigroup", False)
 
         # Detect LCGP vs SVGP from state dict
-        # LCGP has raw "Lu" parameter (L, M, K); SVGP has "Lu._raw" from CholeskyParameter
+        # LCGP has raw "Lu" parameter (L, M, R); SVGP has "Lu._raw" from CholeskyParameter
         is_lcgp = "Lu" in prior_sd and "Lu._raw" not in prior_sd
 
         if is_lcgp:
@@ -138,9 +138,11 @@ def _load_model(model_dir: Path):
                     jitter=1e-5, K=K,
                 )
 
-            # Replace Lu with raw nn.Parameter matching saved shape (L, M, K)
+            # Replace Lu with raw nn.Parameter matching saved shape (L, M, R)
+            # R may differ from K when estimate_lcgp_rank clamps to a smaller value
+            R = prior_sd["Lu"].shape[-1]
             del gp.Lu
-            gp.Lu = nn.Parameter(torch.randn(L, M, K))
+            gp.Lu = nn.Parameter(torch.randn(L, M, R))
             gp.mu = nn.Parameter(torch.randn(L, M))
 
             # Load the trained prior state
@@ -754,8 +756,8 @@ def run(config_path: str):
         is_lcgp = not hasattr(gp.Lu, '_raw')
 
         if is_lcgp:
-            # LCGP: Save Lu as raw parameter (L, M, K)
-            Lu_raw = gp.Lu.data[sort_order, :, :]  # (L, M, K) reordered by Moran's I
+            # LCGP: Save Lu as raw parameter (L, M, R)
+            Lu_raw = gp.Lu.data[sort_order, :, :]  # (L, M, R) reordered by Moran's I
             np.save(model_dir / "Lu.npy", Lu_raw.detach().cpu().numpy())
             msg = f"  Saved LCGP Lu data: Lu {tuple(Lu_raw.shape)}, Z {tuple(Z.shape)}"
         else:

@@ -1759,7 +1759,7 @@ def _render_training_gif(
     print(f"  Saved: {gif_path} ({gif_path.stat().st_size // 1024 // 1024}MB)")
 
 
-def run(config_path: str):
+def run(config_path: str, no_heatmap: bool = False):
     """Generate publication figures.
 
     Reads gene_enrichment.json from analyze stage (not computed here).
@@ -1958,7 +1958,7 @@ def run(config_path: str):
 
     # 5c. Cell-type x genes heatmaps (one per factor, genes ordered by PCA)
     pca_gene_order = results.get("pca_gene_order")
-    if group_loadings and pca_gene_order is not None:
+    if not no_heatmap and group_loadings and pca_gene_order is not None:
         L = next(iter(group_loadings.values())).shape[1]
         celltype_dir = figures_dir / "celltype_gene_loadings"
         celltype_dir.mkdir(exist_ok=True)
@@ -1977,7 +1977,7 @@ def run(config_path: str):
 
     # 5d. Factor x genes heatmaps (one per cell type, genes ordered by per-celltype PCA)
     pca_gene_order_by_celltype = results.get("pca_gene_order_by_celltype")
-    if group_loadings and pca_gene_order_by_celltype is not None:
+    if not no_heatmap and group_loadings and pca_gene_order_by_celltype is not None:
         sorted_group_ids = sorted(group_loadings.keys())
         G_ct = len(sorted_group_ids)
         factor_gene_dir = figures_dir / "factor_gene_loadings"

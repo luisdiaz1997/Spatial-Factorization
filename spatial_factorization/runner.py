@@ -144,6 +144,7 @@ class JobRunner:
         failed_only: bool = False,
         video: bool = False,
         gpu_only: bool = False,
+        no_heatmap: bool = False,
     ):
         """Initialize the job runner.
 
@@ -156,6 +157,7 @@ class JobRunner:
             config_name: Filename to search for when config_path is a directory.
             failed_only: Only re-run jobs that failed in the previous run_status.json.
             gpu_only: Only assign jobs to GPUs; never fall back to CPU.
+            no_heatmap: Skip celltype_gene_loadings and factor_gene_loadings heatmaps.
         """
         self.config_path = Path(config_path)
         self.stages = stages or ["train", "analyze", "figures"]
@@ -166,6 +168,7 @@ class JobRunner:
         self.failed_only = failed_only
         self.video = video
         self.gpu_only = gpu_only
+        self.no_heatmap = no_heatmap
         self.jobs: List[Job] = []
         self.run_status = RunStatus()
         self.status_manager = StatusManager()
@@ -697,6 +700,8 @@ class JobRunner:
             "-c",
             str(config_path),
         ]
+        if stage == "figures" and self.no_heatmap:
+            cmd.append("--no-heatmap")
 
         env = dict(os.environ)
         if force_cpu:
