@@ -47,8 +47,8 @@ D        = 200       # number of genes
 N_GROUPS = 3
 NOISE_FRAC   = 1/2   # fraction of points with randomly reassigned group
 LENGTHSCALE  = 100.0
-GROUP_DIFF   = 0.1
-JITTER       = 1e-3
+GROUP_DIFF   = 1e-1
+JITTER       = 7e-5
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")

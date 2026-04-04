@@ -1618,7 +1618,7 @@ def plot_groupwise_factors_3d(
 
     N = coords.shape[0]
     base = _auto_point_size(N)
-    s_2d = base * 0.5
+    s_2d = s
     s_3d = base * 0.6
 
     n_factors = min(n_factors, factors.shape[1])

@@ -71,7 +71,7 @@ counts = np.bincount(C, minlength=len(group_names))
 all_groups = np.argsort(counts)[::-1]  # all groups sorted by cell count descending
 fig_3d = plot_groupwise_factors_3d(
     exp_F, groupwise, X, C, group_names,
-    top_groups=all_groups, s=2.0, n_factors=exp_F.shape[1],
+    top_groups=all_groups, s=2.0, n_factors=exp_F.shape[1], cmap="bwr",
 )
 out_3d = os.path.join(OUT_DIR, "ground_truth_groupwise_factors_3d_complete.png")
 fig_3d.savefig(out_3d, dpi=150, bbox_inches="tight")
