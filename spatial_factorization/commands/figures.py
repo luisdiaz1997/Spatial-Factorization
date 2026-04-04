@@ -1166,10 +1166,10 @@ def _draw_factor_3d_shared(
     ax.set_zlim(z_floor, z_ceil)
     ax.margins(0, 0, 0)
     ax.view_init(elev=elev, azim=azim)
-    ax.dist = 4
+    ax.dist = 5
 
     pos = ax.get_position()
-    pad = 0.18
+    pad = 0.0
     ax.set_position([pos.x0 - pad * pos.width,
                      pos.y0 - pad * pos.height,
                      pos.width  * (1 + 2 * pad),
@@ -1586,7 +1586,7 @@ def plot_groupwise_factors_3d(
     s: float = 0.5,
     cmap: str = "turbo",
     w_col: float = 3.5,
-    h_header: float = 2.5,
+    h_header: float = 3.0,
     h_factor: float = 4.5,
     n_factors: int = 2,
 ) -> plt.Figure:
