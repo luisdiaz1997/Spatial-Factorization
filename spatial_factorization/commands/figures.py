@@ -1151,9 +1151,10 @@ def _draw_factor_3d_shared(
     ax.grid(False)
     ax.set_axis_off()
 
-    # Shadow disc at z_floor
+    # 2D factor map at z_floor (same colormap as 3D surface)
     ax.scatter(x1, x2, np.full_like(values, z_floor),
-               c="#9e9e9e", s=s, alpha=0.9, edgecolors="none", zorder=1)
+               c=values, cmap=cmap, vmin=vmin, vmax=vmax,
+               s=s, alpha=0.9, edgecolors="none", zorder=1)
 
     # Factor surface
     ax.scatter(x1, x2, values,
@@ -1587,16 +1588,17 @@ def plot_groupwise_factors_3d(
     w_col: float = 3.5,
     h_header: float = 2.5,
     h_factor: float = 4.5,
+    n_factors: int = 2,
 ) -> plt.Figure:
-    """Compact 3×4 figure: top-2 factors × top-3 groups with 3D surface panels.
+    """Compact figure: n_factors factors × top-3 groups with 3D surface panels.
 
     Layout:
         Row 0 (header): [empty] [group A loc] [group B loc] [group C loc]
         Row 1 (F0):     [F0 uncond 3D] [cond gA F0] [cond gB F0] [cond gC F0]
-        Row 2 (F1):     [F1 uncond 3D] [cond gA F1] [cond gB F1] [cond gC F1]
+        ...
 
     Shared vmin/vmax and z-limits across all 3D panels derived from
-    unconditional factor percentiles (top-2 factors combined).
+    unconditional factor percentiles.
 
     Args:
         factors:           (N, L) unconditional factor means (already Moran-sorted)
@@ -1607,6 +1609,7 @@ def plot_groupwise_factors_3d(
         top_groups:        indices of top-3 groups by cell count
         s:                 base scatter point size
         cmap:              colormap for factor panels
+        n_factors:         number of factors to show (default 2; pass factors.shape[1] for all)
 
     Returns:
         matplotlib Figure
@@ -1618,7 +1621,7 @@ def plot_groupwise_factors_3d(
     s_2d = base * 0.5
     s_3d = base * 0.6
 
-    n_factors = min(2, factors.shape[1])
+    n_factors = min(n_factors, factors.shape[1])
     n_groups_show = len(top_groups)  # 3
     n_rows = 1 + n_factors   # header + 2 factor rows
     n_cols = 1 + n_groups_show  # uncond + 3 groups
@@ -2024,6 +2027,17 @@ def run(config_path: str, no_heatmap: bool = False):
             fig.savefig(figures_dir / "groupwise_factors_3d.png", dpi=150, bbox_inches="tight")
             plt.close(fig)
             print(f"  Saved: {figures_dir}/groupwise_factors_3d.png")
+
+            # Complete version: all factors × all groups
+            all_groups = np.argsort(counts)[::-1]  # all groups, sorted by cell count
+            print("Generating groupwise factors 3D figure (complete)...")
+            fig = plot_groupwise_factors_3d(
+                factors, groupwise_factors, coords, groups_np, group_names,
+                top_groups=all_groups, s=s, n_factors=factors.shape[1],
+            )
+            fig.savefig(figures_dir / "groupwise_factors_3d_complete.png", dpi=150, bbox_inches="tight")
+            plt.close(fig)
+            print(f"  Saved: {figures_dir}/groupwise_factors_3d_complete.png")
 
         # 7. Per-cell-type summary: factors + conditional factors + top/bottom enriched genes
         if gene_enrichment is not None and gene_names is not None:

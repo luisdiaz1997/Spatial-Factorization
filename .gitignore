@@ -213,8 +213,12 @@ notebooks/**/*.log
 # Project-specific outputs (preprocessed data, trained models, analysis results)
 outputs/
 
-# Data files
-data/
+# Data files (raw/processed data, large binaries)
+data/*
+!data/toy/
+data/toy/*
+!data/toy/generate.py
+!data/toy/plot_factors.py
 
 # Generated per-model configs (regenerate with `spatial_factorization generate`)
 # Only general.yaml and general_test.yaml are kept in version control.
