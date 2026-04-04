@@ -1131,7 +1131,7 @@ def _draw_factor_3d_shared(
     ax, coords: np.ndarray, values: np.ndarray,
     vmin: float, vmax: float, z_floor: float, z_ceil: float,
     cmap: str = "turbo", s: float = 0.3, alpha: float = 0.9,
-    elev: float = 25.0, azim: float = -90.0,
+    elev: float = 35.0, azim: float = -60.0,
 ) -> None:
     """3D surface scatter with externally supplied color scale and z-limits."""
     x1, x2 = coords[:, 0], coords[:, 1]
@@ -1631,7 +1631,7 @@ def plot_groupwise_factors_3d(
     vmin = float(np.percentile(uncond_vals, 1))
     vmax = float(np.percentile(uncond_vals, 99))
     z_range = vmax - vmin
-    z_floor = vmin - 0.4 * z_range
+    z_floor = vmin - 0.8 * z_range
 
     fig = plt.figure(figsize=(n_cols * w_col, h_header + n_factors * h_factor + 0.5))
     gs = GridSpec(
@@ -1660,7 +1660,6 @@ def plot_groupwise_factors_3d(
             vmin=vmin, vmax=vmax, z_floor=z_floor, z_ceil=vmax,
             cmap=cmap, s=s_3d,
         )
-        ax_uncond.set_title(f"Factor {fi + 1}\n(unconditional)", fontsize=8)
 
         # Cols 1..3: conditional 3D
         for i, g in enumerate(top_groups):
