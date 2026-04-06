@@ -1131,7 +1131,7 @@ def _draw_factor_3d_shared(
     ax, coords: np.ndarray, values: np.ndarray,
     vmin: float, vmax: float, z_floor: float, z_ceil: float,
     cmap: str = "turbo", s: float = 0.3, alpha: float = 0.9,
-    elev: float = 35.0, azim: float = -60.0,
+    elev: float = 15.0, azim: float = -60.0,
 ) -> None:
     """3D surface scatter with externally supplied color scale and z-limits."""
     x1, x2 = coords[:, 0], coords[:, 1]
