@@ -1741,6 +1741,202 @@ def plot_groupwise_factors_3d(
     return fig
 
 
+def _draw_factor_3d_by_group(
+    ax, coords: np.ndarray, values: np.ndarray,
+    groups: np.ndarray, group_colors: list,
+    z_floor: float, z_ceil: float,
+    s: float = 0.3, alpha: float = 0.9,
+    elev: float = 15.0, azim: float = -60.0,
+    single_group: Optional[int] = None,
+) -> None:
+    """3D scatter colored by group membership instead of factor value.
+
+    If single_group is None: all groups shown, each dot colored by its group.
+    If single_group is set: all dots colored with that group's color.
+    """
+    x1, x2 = coords[:, 0], coords[:, 1]
+
+    transparent = (1.0, 1.0, 1.0, 0.0)
+    ax.xaxis.set_pane_color(transparent)
+    ax.yaxis.set_pane_color(transparent)
+    ax.zaxis.set_pane_color(transparent)
+    ax.xaxis.line.set_color(transparent)
+    ax.yaxis.line.set_color(transparent)
+    ax.zaxis.line.set_color(transparent)
+    for axis in [ax.xaxis, ax.yaxis, ax.zaxis]:
+        axis.set_ticklabels([])
+        axis._axinfo["tick"]["inward_factor"] = 0.0
+        axis._axinfo["tick"]["outward_factor"] = 0.0
+        axis._axinfo["grid"]["color"] = (0, 0, 0, 0)
+    ax.grid(False)
+    ax.set_axis_off()
+
+    # 2D base at z_floor colored by group
+    if single_group is not None:
+        ax.scatter(x1, x2, np.full_like(values, z_floor),
+                   c=group_colors[single_group], s=s, alpha=0.6,
+                   edgecolors="none", zorder=1)
+    else:
+        for g, color in enumerate(group_colors):
+            mask = groups == g
+            if mask.any():
+                ax.scatter(x1[mask], x2[mask], np.full_like(values[mask], z_floor),
+                           c=[color], s=s, alpha=0.6, edgecolors="none", zorder=1)
+
+    # 3D surface colored by group
+    if single_group is not None:
+        ax.plot_trisurf(x1, x2, values,
+                        color=group_colors[single_group],
+                        alpha=alpha, edgecolor="none", linewidth=0,
+                        antialiased=True, zorder=2)
+    else:
+        for g, color in enumerate(group_colors):
+            mask = groups == g
+            if mask.any():
+                ax.scatter(x1[mask], x2[mask], values[mask],
+                           c=[color], s=s, alpha=alpha, edgecolors="none", zorder=2)
+
+    ax.set_xlim(float(x1.min()), float(x1.max()))
+    ax.set_ylim(float(x2.max()), float(x2.min()))  # inverted y
+    ax.set_zlim(z_floor, z_ceil)
+    ax.margins(0, 0, 0)
+    ax.view_init(elev=elev, azim=azim)
+    ax.dist = 5
+
+    pos = ax.get_position()
+    pad = 0.0
+    ax.set_position([pos.x0 - pad * pos.width,
+                     pos.y0 - pad * pos.height,
+                     pos.width  * (1 + 2 * pad),
+                     pos.height * (1 + 2 * pad)])
+
+
+def _draw_group_loc_panel_colored(
+    ax, coords: np.ndarray, groups: np.ndarray, g: int,
+    group_colors: list, s: float = 0.5, alpha: float = 0.9,
+) -> None:
+    """Scatter all cells with group g in its color, others dimmed gray."""
+    bg_mask = groups != g
+    fg_mask = groups == g
+    if bg_mask.any():
+        ax.scatter(
+            coords[bg_mask, 0], coords[bg_mask, 1],
+            c="lightgray", s=s, alpha=0.4,
+            edgecolors="none", rasterized=True,
+        )
+    if fg_mask.any():
+        ax.scatter(
+            coords[fg_mask, 0], coords[fg_mask, 1],
+            c=group_colors[g], s=s, alpha=alpha,
+            edgecolors="none", rasterized=True,
+        )
+    ax.invert_yaxis()
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_facecolor("gray")
+
+
+def plot_groupwise_factors_3d_color(
+    factors: np.ndarray,
+    groupwise_factors: dict,
+    coords: np.ndarray,
+    groups: np.ndarray,
+    group_names: List[str],
+    top_groups: np.ndarray,
+    group_colors: list,
+    s: float = 0.5,
+    w_col: float = 3.5,
+    h_header: float = 3.0,
+    h_factor: float = 4.5,
+    n_factors: int = 2,
+) -> plt.Figure:
+    """Same layout as plot_groupwise_factors_3d but colored by group, not factor value.
+
+    Header row: group location panels colored by group color.
+    First column (all groups): each dot colored by its actual group.
+    Per-group columns: all dots in that group's color.
+    """
+    from matplotlib.gridspec import GridSpec
+
+    N = coords.shape[0]
+    base = _auto_point_size(N)
+    s_2d = s
+    s_3d = base * 0.6
+
+    n_factors = min(n_factors, factors.shape[1])
+    n_groups_show = len(top_groups)
+    n_rows = 1 + n_factors
+    n_cols = 1 + n_groups_show
+
+    # Shared z-limits
+    uncond_vals = factors[:, :n_factors].ravel()
+    vmin = float(np.percentile(uncond_vals, 1))
+    vmax = float(np.percentile(uncond_vals, 99))
+    z_range = vmax - vmin
+    z_floor = vmin - 0.8 * z_range
+
+    fig = plt.figure(figsize=(n_cols * w_col, h_header + n_factors * h_factor + 0.5))
+    gs = GridSpec(
+        n_rows, n_cols, figure=fig,
+        height_ratios=[h_header] + [h_factor] * n_factors,
+        left=0.02, right=0.99, top=0.94, bottom=0.01,
+        wspace=0.05, hspace=0.08,
+    )
+
+    # Row 0, col 0: legend panel
+    import matplotlib.patches as mpatches
+    ax00 = fig.add_subplot(gs[0, 0])
+    ax00.set_xticks([])
+    ax00.set_yticks([])
+    ax00.set_facecolor("white")
+    for spine in ax00.spines.values():
+        spine.set_visible(False)
+    legend_handles = [
+        mpatches.Patch(color=group_colors[int(g)], label=group_names[int(g)])
+        for g in top_groups
+    ]
+    ax00.legend(
+        handles=legend_handles, title="Cell Types",
+        loc="center", fontsize=14, title_fontsize=16,
+        frameon=True, framealpha=0.9,
+    )
+
+    # Row 0, cols 1..: group location panels colored by group
+    for i, g in enumerate(top_groups):
+        ax = fig.add_subplot(gs[0, i + 1])
+        _draw_group_loc_panel_colored(ax, coords, groups, int(g), group_colors, s=s_2d)
+        ax.set_title(group_names[int(g)], fontsize=9)
+
+    # Rows 1..n_factors: factor rows
+    for fi in range(n_factors):
+        # Col 0: unconditional 3D — all groups, colored by actual group
+        ax_uncond = fig.add_subplot(gs[fi + 1, 0], projection="3d")
+        _draw_factor_3d_by_group(
+            ax_uncond, coords, factors[:, fi],
+            groups=groups, group_colors=group_colors,
+            z_floor=z_floor, z_ceil=vmax,
+            s=s_3d, single_group=None,
+        )
+
+        # Cols 1..: conditional 3D — single group color
+        for i, g in enumerate(top_groups):
+            ax = fig.add_subplot(gs[fi + 1, i + 1], projection="3d")
+            factors_g = groupwise_factors.get(int(g))
+            if factors_g is not None:
+                _draw_factor_3d_by_group(
+                    ax, coords, factors_g[:, fi],
+                    groups=groups, group_colors=group_colors,
+                    z_floor=z_floor, z_ceil=vmax,
+                    s=s_3d, single_group=int(g),
+                )
+
+    fig.suptitle(
+        "Groupwise Conditional Posterior (colored by cell type)",
+        fontsize=12, y=0.98,
+    )
+    return fig
+
+
 def _auto_point_size(N: int) -> float:
     """Scale point size as 100 / sqrt(N) so visual density stays consistent."""
     return 100.0 / np.sqrt(N)

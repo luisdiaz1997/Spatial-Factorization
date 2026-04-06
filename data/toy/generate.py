@@ -141,7 +141,17 @@ print(f"Rate matrix shape: {rate.shape}, mean rate: {rate.mean():.4f}")
 Y_np = np.random.poisson(rate).astype(np.float32) # (N, D)
 print(f"Y shape: {Y_np.shape}, sparsity: {(Y_np == 0).mean():.3f}")
 
-# ── 7. Save outputs ───────────────────────────────────────────────────────────
+# ── 7. Relabel groups so largest = 0 (A), second = 1 (B), etc. ──────────────
+group_counts = [(C_np == g).sum() for g in range(N_GROUPS)]
+size_order = np.argsort(group_counts)[::-1]
+relabel = np.zeros(N_GROUPS, dtype=np.int64)
+relabel[size_order] = np.arange(N_GROUPS)
+C_np = relabel[C_np]
+# Remap conditional factor dict keys
+cond_means = {int(relabel[g]): cond_means[g] for g in range(N_GROUPS)}
+print(f"Group sizes (relabelled): A={(C_np==0).sum()}, B={(C_np==1).sum()}, C={(C_np==2).sum()}")
+
+# ── 8. Save outputs ───────────────────────────────────────────────────────────
 np.save(os.path.join(OUT_DIR, "X.npy"), X_np.astype(np.float32))
 np.save(os.path.join(OUT_DIR, "C.npy"), C_np)
 np.save(os.path.join(OUT_DIR, "ground_truth_factors.npy"),  F_np)

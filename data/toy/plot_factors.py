@@ -10,6 +10,7 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from spatial_factorization.commands.figures import (
     plot_factors_spatial, plot_groupwise_factors, plot_groupwise_factors_3d,
+    plot_groupwise_factors_3d_color,
 )
 
 OUT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -76,3 +77,14 @@ fig_3d = plot_groupwise_factors_3d(
 out_3d = os.path.join(OUT_DIR, "ground_truth_groupwise_factors_3d_complete.png")
 fig_3d.savefig(out_3d, dpi=150, bbox_inches="tight")
 print(f"Saved: {out_3d}")
+
+# --- groupwise 3D complete colored by cell type ---
+GROUP_COLORS = ["red", "blue", "yellow"]
+fig_3d_color = plot_groupwise_factors_3d_color(
+    exp_F, groupwise, X, C, group_names,
+    top_groups=all_groups, group_colors=GROUP_COLORS, s=2.0,
+    n_factors=exp_F.shape[1],
+)
+out_3d_color = os.path.join(OUT_DIR, "groupwise_factors_color.png")
+fig_3d_color.savefig(out_3d_color, dpi=150, bbox_inches="tight")
+print(f"Saved: {out_3d_color}")
