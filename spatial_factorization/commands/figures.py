@@ -1576,6 +1576,68 @@ def plot_celltype_summary_loadings(
     return fig
 
 
+def plot_factors_spatial_3d(
+    factors: np.ndarray,
+    coords: np.ndarray,
+    moran_idx: Optional[np.ndarray] = None,
+    moran_values: Optional[np.ndarray] = None,
+    ncols: int = 5,
+    s: float = 0.5,
+    cmap: str = "turbo",
+    w_col: float = 3.5,
+    h_row: float = 4.5,
+) -> plt.Figure:
+    """3D surface version of plot_factors_spatial.
+
+    Same grid layout (ncols=5) but each panel is a 3D scatter using
+    _draw_factor_3d_shared instead of a flat 2D scatter.
+    """
+    from matplotlib.gridspec import GridSpec
+
+    L = factors.shape[1]
+    if moran_idx is not None:
+        factors = factors[:, moran_idx]
+
+    N = coords.shape[0]
+    s_3d = _auto_point_size(N) * 0.6
+
+    nrows = int(np.ceil(L / ncols))
+
+    vmin = float(np.percentile(factors, 1))
+    vmax = float(np.percentile(factors, 99))
+    z_range = vmax - vmin
+    z_floor = vmin - 0.8 * z_range
+
+    fig = plt.figure(figsize=(ncols * w_col, nrows * h_row))
+    gs = GridSpec(
+        nrows, ncols, figure=fig,
+        left=0.01, right=0.99, top=0.95, bottom=0.01,
+        wspace=0.02, hspace=0.05,
+    )
+
+    for i in range(L):
+        row, col = divmod(i, ncols)
+        ax = fig.add_subplot(gs[row, col], projection="3d")
+        _draw_factor_3d_shared(
+            ax, coords, factors[:, i],
+            vmin=vmin, vmax=vmax, z_floor=z_floor, z_ceil=vmax,
+            cmap=cmap, s=s_3d,
+        )
+        if moran_values is not None:
+            title = f"Factor {moran_idx[i]+1}  I={moran_values[i]:.3f}"
+        else:
+            title = f"Factor {i+1}"
+        ax.set_title(title, fontsize=9, pad=2)
+
+    # Hide empty subplots
+    for i in range(L, nrows * ncols):
+        row, col = divmod(i, ncols)
+        ax = fig.add_subplot(gs[row, col])
+        ax.set_visible(False)
+
+    return fig
+
+
 def plot_groupwise_factors_3d(
     factors: np.ndarray,
     groupwise_factors: dict,
@@ -1826,6 +1888,16 @@ def run(config_path: str, no_heatmap: bool = False):
         fig.savefig(figures_dir / "factors_spatial.png", dpi=150, bbox_inches="tight")
         plt.close(fig)
         print(f"  Saved: {figures_dir}/factors_spatial.png")
+
+        print("Generating 3D spatial factor plot...")
+        fig = plot_factors_spatial_3d(
+            factors, coords,
+            moran_idx=moran_idx,
+            moran_values=moran_values,
+        )
+        fig.savefig(figures_dir / "factors_spatial_3d.png", dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"  Saved: {figures_dir}/factors_spatial_3d.png")
 
     # 1b. Scales (uncertainty) spatial plot
     if scales is not None:
