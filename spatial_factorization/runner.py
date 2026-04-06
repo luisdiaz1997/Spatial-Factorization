@@ -145,6 +145,7 @@ class JobRunner:
         video: bool = False,
         gpu_only: bool = False,
         no_heatmap: bool = False,
+        skip_general: bool = False,
     ):
         """Initialize the job runner.
 
@@ -158,6 +159,7 @@ class JobRunner:
             failed_only: Only re-run jobs that failed in the previous run_status.json.
             gpu_only: Only assign jobs to GPUs; never fall back to CPU.
             no_heatmap: Skip celltype_gene_loadings and factor_gene_loadings heatmaps.
+            skip_general: Skip general configs; treat all non-general yamls as per-model configs.
         """
         self.config_path = Path(config_path)
         self.stages = stages or ["train", "analyze", "figures"]
@@ -169,6 +171,7 @@ class JobRunner:
         self.video = video
         self.gpu_only = gpu_only
         self.no_heatmap = no_heatmap
+        self.skip_general = skip_general
         self.jobs: List[Job] = []
         self.run_status = RunStatus()
         self.status_manager = StatusManager()
@@ -316,6 +319,19 @@ class JobRunner:
             return failed_configs
 
         if self.config_path.is_dir():
+            if self.skip_general:
+                # Skip general configs entirely; treat all non-general yamls as per-model
+                per_model = sorted(
+                    p for p in self.config_path.rglob("*.yaml")
+                    if not Config.is_general_config(p)
+                )
+                if not per_model:
+                    raise ValueError(f"No per-model yaml configs found in {self.config_path}")
+                print(f"Found {len(per_model)} per-model config(s) (--skip-general)")
+                for p in per_model:
+                    print(f"  {p.name}")
+                return per_model
+
             general_configs = list(self.config_path.rglob(self.config_name))
 
             if general_configs:
@@ -658,6 +674,8 @@ class JobRunner:
             cmd.append("--resume")
         if task == "train" and job.video:
             cmd.append("--video")
+        if "figures" in stages and self.no_heatmap:
+            cmd.append("--no-heatmap")
         cmd += ["-c", str(job.config_path)]
 
         try:

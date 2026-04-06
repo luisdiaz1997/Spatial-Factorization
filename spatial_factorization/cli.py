@@ -119,7 +119,8 @@ def multianalyze(config, models, n_pairs, match_against, output):
 @click.option("--config-name", default="general.yaml", show_default=True, help="Config filename to search for when config is a directory (e.g. general_test.yaml)")
 @click.option("--failed", "failed_only", is_flag=True, help="Re-run only jobs that failed in the previous run (reads run_status.json)")
 @click.option("--no-heatmap", is_flag=True, default=False, help="Skip celltype_gene_loadings and factor_gene_loadings heatmaps")
-def run_pipeline(stages, config, force, dry_run, resume, video, gpu_only, config_name, failed_only, no_heatmap):
+@click.option("--skip-general", is_flag=True, default=False, help="Skip general configs; run all non-general yamls in the directory as per-model configs")
+def run_pipeline(stages, config, force, dry_run, resume, video, gpu_only, config_name, failed_only, no_heatmap, skip_general):
     """Run pipeline stages sequentially, or run all models in parallel.
 
     \b
@@ -168,7 +169,7 @@ def run_pipeline(stages, config, force, dry_run, resume, video, gpu_only, config
     if "all" in stages:
         from .runner import JobRunner
 
-        JobRunner(config, force_preprocess=force, dry_run=dry_run, resume=resume, config_name=config_name, failed_only=failed_only, video=video, gpu_only=gpu_only, no_heatmap=no_heatmap).run()
+        JobRunner(config, force_preprocess=force, dry_run=dry_run, resume=resume, config_name=config_name, failed_only=failed_only, video=video, gpu_only=gpu_only, no_heatmap=no_heatmap, skip_general=skip_general).run()
         return
 
     # Validate stages
@@ -186,7 +187,7 @@ def run_pipeline(stages, config, force, dry_run, resume, video, gpu_only, config
     config_path = _Path(config)
     if config_path.is_dir() or _Config.is_general_config(config_path):
         from .runner import JobRunner
-        JobRunner(config, stages=ordered, force_preprocess=force, dry_run=dry_run, resume=resume, config_name=config_name, failed_only=failed_only, video=video, gpu_only=gpu_only, no_heatmap=no_heatmap).run()
+        JobRunner(config, stages=ordered, force_preprocess=force, dry_run=dry_run, resume=resume, config_name=config_name, failed_only=failed_only, video=video, gpu_only=gpu_only, no_heatmap=no_heatmap, skip_general=skip_general).run()
         return
 
     # Existing sequential path (single per-model config, no multiplexer)
