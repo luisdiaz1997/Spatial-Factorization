@@ -2,22 +2,15 @@
 
 Utility functions imported by plot_knn.py and plot_knn_robustness.py.
 
-  - build_faiss_pool:  FAISS flat-L2 KNN search (N, K+1) including self
-  - select_baseline:   K-nearest neighbors for a single query
-  - select_gaussian:   sample K from all N points with Gaussian distance weights
+  - select_baseline:  K-nearest neighbors for a single query (FAISS)
+  - select_gaussian:  sample K from all N points with Gaussian distance weights
 
 Motivation: with standard K-nearest, dense regions produce very local neighborhoods.
 The Gaussian approach keeps the spatial radius stable as N grows (radius ~ lengthscale).
 """
 
-import os
-import sys
-
 import numpy as np
 import faiss
-
-REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-sys.path.insert(0, REPO_ROOT)
 
 
 # ---------------------------------------------------------------------------
@@ -31,31 +24,16 @@ def default_query_idx(X: np.ndarray) -> int:
 
 
 # ---------------------------------------------------------------------------
-# KNN construction
-# ---------------------------------------------------------------------------
-
-def build_faiss_pool(X: np.ndarray, K: int) -> tuple:
-    """FAISS flat-L2 search over all N points.
-
-    Returns:
-        indices:   (N, K+1) int64 — col 0 is the point itself
-        distances: (N, K+1) float32 — squared L2 distances
-    """
-    X32 = X.astype(np.float32)
-    index = faiss.IndexFlatL2(X.shape[1])
-    index.add(X32)
-    distances, indices = index.search(X32, K + 1)
-    return indices, distances
-
-
-# ---------------------------------------------------------------------------
 # Selection strategies
 # ---------------------------------------------------------------------------
 
 def select_baseline(X: np.ndarray, query_idx: int, K: int) -> np.ndarray:
     """K-nearest neighbors via FAISS (single query)."""
-    idxs, _ = build_faiss_pool(X, K)
-    return idxs[query_idx, 1:]   # exclude self
+    X32 = X.astype(np.float32)
+    index = faiss.IndexFlatL2(X.shape[1])
+    index.add(X32)
+    _, idxs = index.search(X32[query_idx:query_idx + 1], K + 1)
+    return idxs[0, 1:]   # exclude self
 
 
 def select_gaussian(

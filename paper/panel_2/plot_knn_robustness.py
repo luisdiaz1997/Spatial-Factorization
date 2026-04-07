@@ -31,7 +31,7 @@ from spatial_factorization.datasets.base import load_preprocessed
 from spatial_factorization.commands.analyze import _load_model
 from spatial_factorization.commands.figures import _auto_point_size
 from knn_strategies import (
-    build_faiss_pool,
+    select_baseline,
     select_gaussian,
     default_query_idx,
 )
@@ -58,9 +58,7 @@ def compute_all_strategies(
     rng: np.random.Generator,
 ) -> list:
     """Return [baseline, random, even, gaussian] neighbor index arrays for query_in_sub."""
-    # Baseline: FAISS K-nearest directly
-    base_idxs, _ = build_faiss_pool(X_sub, K)
-    baseline = base_idxs[query_in_sub, 1:K + 1]   # exclude self
+    baseline = select_baseline(X_sub, query_in_sub, K)
 
     # Gaussian samples from all N points — radius set by lengthscale, not data density
     gauss_sel = select_gaussian(X_sub, query_in_sub, K, lengthscale, rng=rng)
