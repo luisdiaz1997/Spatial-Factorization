@@ -32,16 +32,16 @@ from spatial_factorization.commands.analyze import _load_model
 from spatial_factorization.commands.figures import _auto_point_size
 from knn_strategies import (
     select_baseline,
-    select_gaussian,
+    select_kernel,
     default_query_idx,
 )
 
-OUT_DIR = PANEL2_DIR
+OUT_DIR = os.path.join(PANEL2_DIR, "robustness")
 
-STRATEGY_LABELS = [
-    "Baseline\n(K-nearest)",
-    "Gaussian",
-]
+KERNEL_LABELS = {
+    "gaussian": "Gaussian",
+    "matern32": "Matérn 3/2",
+}
 NEIGHBOR_COLOR = "#F4A23A"
 QUERY_COLOR    = "#E03030"
 
@@ -56,14 +56,12 @@ def compute_all_strategies(
     K: int,
     lengthscale: float,
     rng: np.random.Generator,
+    kernel: str = "gaussian",
 ) -> list:
-    """Return [baseline, random, even, gaussian] neighbor index arrays for query_in_sub."""
-    baseline = select_baseline(X_sub, query_in_sub, K)
-
-    # Gaussian samples from all N points — radius set by lengthscale, not data density
-    gauss_sel = select_gaussian(X_sub, query_in_sub, K, lengthscale, rng=rng)
-
-    return [baseline, gauss_sel]
+    """Return [baseline, kernel] neighbor index arrays for query_in_sub."""
+    baseline  = select_baseline(X_sub, query_in_sub, K)
+    kernel_sel = select_kernel(X_sub, query_in_sub, K, lengthscale, rng=rng, kernel=kernel)
+    return [baseline, kernel_sel]
 
 
 # ---------------------------------------------------------------------------
@@ -77,8 +75,10 @@ def plot_robustness(
     lengthscale: float,
     rng: np.random.Generator,
     query_coord: np.ndarray,
+    kernel: str = "gaussian",
 ) -> plt.Figure:
-    n_rows = len(STRATEGY_LABELS)
+    strategy_labels = ["Baseline\n(K-nearest)", KERNEL_LABELS[kernel]]
+    n_rows = len(strategy_labels)
     n_cols = len(N_values)
     fig = plt.figure(figsize=(4.5 * n_cols + 1.2, 4.5 * n_rows))
     gs = gridspec.GridSpec(
@@ -100,12 +100,12 @@ def plot_robustness(
         query_in_sub = 0   # query is always first in the subsample
 
         neighbors_list = compute_all_strategies(
-            X_sub, query_in_sub, K, lengthscale, rng=rng,
+            X_sub, query_in_sub, K, lengthscale, rng=rng, kernel=kernel,
         )
         s = _auto_point_size(N)
 
         for row, (label, neighbor_idxs) in enumerate(
-            zip(STRATEGY_LABELS, neighbors_list)
+            zip(strategy_labels, neighbors_list)
         ):
             ax = fig.add_subplot(gs[row, col])
             neighbor_set = set(neighbor_idxs.tolist())
@@ -153,6 +153,7 @@ def main():
     parser.add_argument("--N-values", type=int, nargs="+", default=[5000, 10000, 40000])
     parser.add_argument("--K", type=int, default=None)
     parser.add_argument("--lengthscale", type=float, default=None)
+    parser.add_argument("--kernel", choices=["gaussian", "matern32"], default="gaussian")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--out", type=str, default=None)
     args = parser.parse_args()
@@ -200,7 +201,7 @@ def main():
     print("Building panels...")
 
     fig = plot_robustness(
-        X_full, N_values, K, lengthscale, rng, query_coord,
+        X_full, N_values, K, lengthscale, rng, query_coord, kernel=args.kernel,
     )
 
     dataset_tag = os.path.basename(os.path.normpath(output_dir))
@@ -208,7 +209,7 @@ def main():
     if args.out:
         out_path = args.out
     else:
-        out_path = os.path.join(OUT_DIR, f"knn_robustness_{dataset_tag}_{model_name}.png")
+        out_path = os.path.join(OUT_DIR, f"knn_robustness_{dataset_tag}_{model_name}_{args.kernel}.png")
 
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     print(f"Saved: {out_path}")

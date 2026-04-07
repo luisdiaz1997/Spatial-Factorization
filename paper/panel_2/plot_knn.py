@@ -31,7 +31,7 @@ from spatial_factorization.datasets.base import load_preprocessed
 from spatial_factorization.commands.analyze import _load_model
 from spatial_factorization.commands.figures import _auto_point_size, _build_colormap
 
-OUT_DIR = os.path.dirname(os.path.abspath(__file__))
+OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "knn")
 
 
 # ---------------------------------------------------------------------------
