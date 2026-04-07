@@ -204,10 +204,6 @@ def main():
     )
 
     dataset_tag = os.path.basename(os.path.normpath(output_dir))
-    fig.suptitle(
-        f"{dataset_tag} — KNN neighborhood robustness  (K={K}, σ={lengthscale:.1f})",
-        fontsize=12, y=0.98,
-    )
 
     if args.out:
         out_path = args.out
