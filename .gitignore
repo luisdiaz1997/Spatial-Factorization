@@ -226,3 +226,7 @@ configs/**/*.yaml
 !configs/**/general.yaml
 !configs/**/general_test.yaml
 configs/run_status.json
+
+# Paper panel outputs (generated figures)
+paper/**/*.png
+paper/**/*.pdf

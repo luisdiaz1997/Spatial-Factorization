@@ -964,14 +964,7 @@ def plot_groups(
     has_inducing_points = Z is not None
     n_groups = len(group_names)
 
-    # Use a categorical colormap
-    if n_groups <= 10:
-        cmap = plt.cm.tab10
-    elif n_groups <= 20:
-        cmap = plt.cm.tab20
-    else:
-        cmap = plt.cm.gist_ncar
-    colors = [cmap(i / max(n_groups - 1, 1)) for i in range(n_groups)]
+    colors = _build_colormap(n_groups)
 
     ncols = 2 if has_inducing_points else 1
     fig, axes = plt.subplots(
@@ -1940,6 +1933,17 @@ def plot_groupwise_factors_3d_color(
 def _auto_point_size(N: int) -> float:
     """Scale point size as 100 / sqrt(N) so visual density stays consistent."""
     return 100.0 / np.sqrt(N)
+
+
+def _build_colormap(n_groups: int) -> list:
+    """Return a list of colors for n_groups cell types (matches plot_groups palette)."""
+    if n_groups <= 10:
+        cmap = plt.cm.tab10
+    elif n_groups <= 20:
+        cmap = plt.cm.tab20
+    else:
+        cmap = plt.cm.gist_ncar
+    return [cmap(i / max(n_groups - 1, 1)) for i in range(n_groups)]
 
 
 # Shared vmax for training animation GIFs: max 99th-percentile across variants (slideseq, 20k iters)
