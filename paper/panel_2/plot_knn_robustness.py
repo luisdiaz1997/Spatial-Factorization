@@ -32,8 +32,6 @@ from spatial_factorization.commands.analyze import _load_model
 from spatial_factorization.commands.figures import _auto_point_size
 from knn_strategies import (
     build_faiss_pool,
-    select_random,
-    select_evenly_spaced,
     select_gaussian,
     default_query_idx,
 )
@@ -42,8 +40,6 @@ OUT_DIR = PANEL2_DIR
 
 STRATEGY_LABELS = [
     "Baseline\n(K-nearest)",
-    "Random",
-    "Evenly spaced",
     "Gaussian",
 ]
 NEIGHBOR_COLOR = "#F4A23A"
@@ -58,7 +54,6 @@ def compute_all_strategies(
     X_sub: np.ndarray,
     query_in_sub: int,
     K: int,
-    K_large: int,
     lengthscale: float,
     rng: np.random.Generator,
 ) -> list:
@@ -67,16 +62,10 @@ def compute_all_strategies(
     base_idxs, _ = build_faiss_pool(X_sub, K)
     baseline = base_idxs[query_in_sub, 1:K + 1]   # exclude self
 
-    # Large pool for Random and Evenly spaced
-    pool_all, _ = build_faiss_pool(X_sub, K_large)
-    pool = pool_all[query_in_sub, 1:]              # (K_large,) sorted by distance
-
-    rand_sel  = select_random(pool, K, rng=rng)
-    even_sel  = select_evenly_spaced(pool, K)
     # Gaussian samples from all N points — radius set by lengthscale, not data density
     gauss_sel = select_gaussian(X_sub, query_in_sub, K, lengthscale, rng=rng)
 
-    return [baseline, rand_sel, even_sel, gauss_sel]
+    return [baseline, gauss_sel]
 
 
 # ---------------------------------------------------------------------------
@@ -87,7 +76,6 @@ def plot_robustness(
     X_full: np.ndarray,
     N_values: list,
     K: int,
-    K_large: int,
     lengthscale: float,
     rng: np.random.Generator,
     query_coord: np.ndarray,
@@ -114,7 +102,7 @@ def plot_robustness(
         query_in_sub = 0   # query is always first in the subsample
 
         neighbors_list = compute_all_strategies(
-            X_sub, query_in_sub, K, K_large, lengthscale, rng=rng,
+            X_sub, query_in_sub, K, lengthscale, rng=rng,
         )
         s = _auto_point_size(N)
 
@@ -166,7 +154,6 @@ def main():
     parser.add_argument("--model", default=None)
     parser.add_argument("--N-values", type=int, nargs="+", default=[5000, 10000, 40000])
     parser.add_argument("--K", type=int, default=None)
-    parser.add_argument("--K-large", type=int, default=None)
     parser.add_argument("--lengthscale", type=float, default=None)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--out", type=str, default=None)
@@ -202,7 +189,6 @@ def main():
             lengthscale = float(config.model.get("lengthscale", 8.0))
 
     N_values = [min(n, N_full) for n in args.N_values]
-    K_large  = args.K_large if args.K_large is not None else min(1000, min(N_values))
 
     # Central query coord (from the full dataset)
     query_idx_full = default_query_idx(X_full)
@@ -210,18 +196,18 @@ def main():
 
     print(f"Dataset:     {config.dataset}  (N_full={N_full})")
     print(f"Model:       {model_name}")
-    print(f"K={K}  K_large={K_large}  lengthscale={lengthscale:.2f}")
+    print(f"K={K}  lengthscale={lengthscale:.2f}")
     print(f"N_values:    {N_values}")
     print(f"Query coord: {query_coord}")
     print("Building panels...")
 
     fig = plot_robustness(
-        X_full, N_values, K, K_large, lengthscale, rng, query_coord,
+        X_full, N_values, K, lengthscale, rng, query_coord,
     )
 
     dataset_tag = os.path.basename(os.path.normpath(output_dir))
     fig.suptitle(
-        f"{dataset_tag} — KNN neighborhood robustness  (K={K}, K_large={K_large}, σ={lengthscale:.1f})",
+        f"{dataset_tag} — KNN neighborhood robustness  (K={K}, σ={lengthscale:.1f})",
         fontsize=12, y=0.98,
     )
 

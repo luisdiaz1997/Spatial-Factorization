@@ -1,18 +1,16 @@
-"""KNN selection strategy comparison for LCGP inducing points.
+"""KNN selection strategy comparison: K-nearest baseline vs Gaussian.
 
-Three strategies for selecting K neighbors from a large candidate pool (K_large):
-  1. Random:        uniformly random K from K_large nearest neighbors
-  2. Evenly spaced: every (K_large / K)-th neighbor by distance rank
-  3. Gaussian:      sample proportional to exp(-0.5 * (dist / lengthscale)^2)
+  1. Baseline:  K-nearest neighbors via FAISS
+  2. Gaussian:  sample K from all N points proportional to exp(-0.5*(dist/lengthscale)^2)
 
 Motivation: with standard K-nearest, dense regions produce very local neighborhoods.
-Sampling from a larger pool with spatial spread gives better coverage.
+The Gaussian approach keeps the spatial radius stable as N grows (radius ~ lengthscale).
 
 Usage:
     conda run -n factorization python paper/panel_2/knn_strategies.py \
         -c configs/osmfish/general.yaml
     conda run -n factorization python paper/panel_2/knn_strategies.py \
-        -c configs/slideseq/general.yaml --query-idx 1234 --K 50 --K-large 1000
+        -c configs/slideseq/general.yaml --query-idx 1234 --K 50
 """
 
 import argparse
@@ -47,20 +45,20 @@ def default_query_idx(X: np.ndarray) -> int:
 
 
 # ---------------------------------------------------------------------------
-# KNN pool construction
+# KNN construction
 # ---------------------------------------------------------------------------
 
-def build_faiss_pool(X: np.ndarray, K_large: int) -> tuple:
+def build_faiss_pool(X: np.ndarray, K: int) -> tuple:
     """FAISS flat-L2 search over all N points.
 
     Returns:
-        indices:   (N, K_large+1) int64 — col 0 is the point itself
-        distances: (N, K_large+1) float32 — squared L2 distances
+        indices:   (N, K+1) int64 — col 0 is the point itself
+        distances: (N, K+1) float32 — squared L2 distances
     """
     X32 = X.astype(np.float32)
     index = faiss.IndexFlatL2(X.shape[1])
     index.add(X32)
-    distances, indices = index.search(X32, K_large + 1)
+    distances, indices = index.search(X32, K + 1)
     return indices, distances
 
 
@@ -68,17 +66,10 @@ def build_faiss_pool(X: np.ndarray, K_large: int) -> tuple:
 # Selection strategies
 # ---------------------------------------------------------------------------
 
-def select_random(pool: np.ndarray, K: int, rng: np.random.Generator) -> np.ndarray:
-    """Uniformly random K from pool without replacement."""
-    K = min(K, len(pool))
-    return rng.choice(pool, size=K, replace=False)
-
-
-def select_evenly_spaced(pool: np.ndarray, K: int) -> np.ndarray:
-    """Pick K evenly spaced neighbors by distance rank (pool sorted by distance)."""
-    K = min(K, len(pool))
-    step = len(pool) / K
-    return pool[[int(i * step) for i in range(K)]]
+def select_baseline(X: np.ndarray, query_idx: int, K: int) -> np.ndarray:
+    """K-nearest neighbors via FAISS (single query)."""
+    idxs, _ = build_faiss_pool(X, K)
+    return idxs[query_idx, 1:]   # exclude self
 
 
 def select_gaussian(
@@ -157,16 +148,14 @@ def plot_strategies(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Compare KNN selection strategies (random / evenly-spaced / Gaussian)"
+        description="Compare KNN baseline vs Gaussian selection"
     )
     parser.add_argument("-c", "--config", required=True, help="Path to YAML config")
     parser.add_argument("--model", default=None, help="Model subdirectory (default: mggp_lcgp)")
     parser.add_argument("--query-idx", type=int, default=None,
                         help="Query cell index (default: cell near centroid)")
     parser.add_argument("--K", type=int, default=None,
-                        help="Target number of neighbors (default: from model)")
-    parser.add_argument("--K-large", type=int, default=None,
-                        help="Candidate pool size (default: min(1000, N))")
+                        help="Number of neighbors (default: from model)")
     parser.add_argument("--lengthscale", type=float, default=None,
                         help="Gaussian lengthscale (default: from model kernel or config)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
@@ -184,13 +173,12 @@ def main():
         model_name = config.model_name
 
     output_dir = config.output_dir
-    model_dir = os.path.join(output_dir, model_name)
+    model_dir  = os.path.join(output_dir, model_name)
 
     data = load_preprocessed(output_dir)
     X = data.X.numpy()
     N = len(X)
 
-    # Load model to get K and lengthscale
     model = _load_model(Path(model_dir))
     K = args.K if args.K is not None else model._prior.K
 
@@ -203,78 +191,41 @@ def main():
         except AttributeError:
             lengthscale = float(config.model.get("lengthscale", 8.0))
 
-    K_large = args.K_large if args.K_large is not None else min(1000, N)
-    K_large = max(K_large, K)  # pool must be at least as large as K
-
     query_idx = args.query_idx if args.query_idx is not None else default_query_idx(X)
 
     print(f"Dataset:     {config.dataset}  (N={N})")
     print(f"Model:       {model_name}")
-    print(f"K={K}  K_large={K_large}  lengthscale={lengthscale:.2f}")
+    print(f"K={K}  lengthscale={lengthscale:.2f}")
     print(f"Query idx:   {query_idx}")
 
     print()
-    print("Timing full N×K graph construction for each strategy:")
+    print("Timing full N×K graph construction:")
 
-    # --- Baseline: FAISS directly with K ---
     t0 = time.perf_counter()
-    baseline_all, _ = build_faiss_pool(X, K)   # (N, K+1)
-    baseline_all = baseline_all[:, 1:]          # (N, K) exclude self
+    baseline_all, _ = build_faiss_pool(X, K)
+    baseline_all = baseline_all[:, 1:]   # (N, K)
     t_baseline = time.perf_counter() - t0
-    print(f"  Baseline   (FAISS K={K}):          {t_baseline:.4f}s")
+    print(f"  Baseline (FAISS K={K}):       {t_baseline:.4f}s")
 
-    # --- Build shared large pool (used by Random, Evenly spaced) ---
-    t0 = time.perf_counter()
-    pool_all, _ = build_faiss_pool(X, K_large)  # (N, K_large+1)
-    pool_all = pool_all[:, 1:]                   # (N, K_large) exclude self
-    t_pool = time.perf_counter() - t0
-    print(f"  FAISS pool (K_large={K_large}):      {t_pool:.4f}s  [shared by Random/Even]")
-
-    # --- Random: shuffle each row, take first K ---
-    t0 = time.perf_counter()
-    rand_all = rng.permuted(pool_all, axis=1)[:, :K]   # (N, K)
-    t_rand = time.perf_counter() - t0
-    print(f"  Random     (pool + select):        {t_pool + t_rand:.4f}s  (select={t_rand:.4f}s)")
-
-    # --- Evenly spaced: fixed index stride, same for all rows ---
-    t0 = time.perf_counter()
-    step = K_large / K
-    even_cols = [int(i * step) for i in range(K)]
-    even_all = pool_all[:, even_cols]                   # (N, K)
-    t_even = time.perf_counter() - t0
-    print(f"  Even spaced(pool + select):        {t_pool + t_even:.4f}s  (select={t_even:.4f}s)")
-
-    # --- Gaussian: sample from ALL N points with Gaussian weights (no pool) ---
-    # Radius is determined by lengthscale, not data density — stable across N.
-    # Process in batches to avoid N×N distance matrix.
     t0 = time.perf_counter()
     BATCH = 2000
     gauss_all = np.empty((N, K), dtype=np.int64)
     for start in range(0, N, BATCH):
         end = min(start + BATCH, N)
-        # distances from batch queries to all N points: (batch, N)
         dists_batch = np.linalg.norm(
             X[start:end, np.newaxis, :] - X[np.newaxis, :, :], axis=2
         )
         for bi, i in enumerate(range(start, end)):
-            dists_batch[bi, i] = np.inf   # exclude self
+            dists_batch[bi, i] = np.inf
             w = np.exp(-0.5 * (dists_batch[bi] / lengthscale) ** 2)
             w /= w.sum()
             gauss_all[i] = rng.choice(N, size=K, replace=False, p=w)
     t_gauss = time.perf_counter() - t0
-    print(f"  Gaussian   (all-N, batched):       {t_gauss:.4f}s")
-
-    # Pull per-query rows for visualization
-    baseline  = baseline_all[query_idx]
-    rand_sel  = rand_all[query_idx]
-    even_sel  = even_all[query_idx]
-    gauss_sel = gauss_all[query_idx]
+    print(f"  Gaussian  (all-N, batched):   {t_gauss:.4f}s")
 
     neighbor_sets = {
-        f"Baseline\n(K-nearest, K={K})": baseline,
-        f"Random\n(pool={K_large}, K={K})": rand_sel,
-        f"Evenly spaced\n(pool={K_large}, K={K})": even_sel,
-        f"Gaussian\n(σ={lengthscale:.1f}, all-N, K={K})": gauss_sel,
+        f"Baseline\n(K-nearest, K={K})": baseline_all[query_idx],
+        f"Gaussian\n(σ={lengthscale:.1f}, K={K})": gauss_all[query_idx],
     }
 
     s = _auto_point_size(N)
@@ -282,7 +233,7 @@ def main():
 
     dataset_tag = os.path.basename(os.path.normpath(output_dir))
     fig.suptitle(
-        f"{dataset_tag} — KNN selection strategies (query={query_idx})",
+        f"{dataset_tag} — KNN strategies (query={query_idx})",
         fontsize=11, y=1.01,
     )
 
