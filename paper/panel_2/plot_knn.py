@@ -14,20 +14,21 @@ Usage:
 """
 
 import argparse
-import json
 import os
 import sys
+from pathlib import Path
 
 import numpy as np
+import torch
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
-from sklearn.neighbors import NearestNeighbors
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, REPO_ROOT)
 
 from spatial_factorization.config import Config
 from spatial_factorization.datasets.base import load_preprocessed
+from spatial_factorization.commands.analyze import _load_model
 from spatial_factorization.commands.figures import _auto_point_size, _build_colormap
 
 OUT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -36,22 +37,6 @@ OUT_DIR = os.path.dirname(os.path.abspath(__file__))
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def resolve_K(model_dir: str, config: Config) -> int:
-    """Get K from the saved training.json, falling back to config, then 50."""
-    training_json = os.path.join(model_dir, "training.json")
-    if os.path.exists(training_json):
-        with open(training_json) as f:
-            t = json.load(f)
-        return t.get("model_config", {}).get("K", config.model.get("K", 50))
-    return config.model.get("K", 50)
-
-
-def find_knn(Z: np.ndarray, query_idx: int, K: int) -> np.ndarray:
-    """Return indices of K nearest neighbors of Z[query_idx] (excluding itself)."""
-    nbrs = NearestNeighbors(n_neighbors=K + 1, algorithm="ball_tree").fit(Z)
-    _, indices = nbrs.kneighbors(Z[query_idx : query_idx + 1])
-    return indices[0][indices[0] != query_idx][:K]
 
 
 def default_query_idx(X: np.ndarray) -> int:
@@ -180,16 +165,19 @@ def main():
     C = data.groups.numpy()    # (N,)
     group_names = data.group_names
 
-    Z = np.load(os.path.join(model_dir, "Z.npy"))
-
-    K = args.K if args.K is not None else resolve_K(model_dir, config)
     query_idx = args.query_idx if args.query_idx is not None else default_query_idx(X)
+
+    # Use the model's own calculate_knn (FAISS-based, same as training)
+    model = _load_model(Path(model_dir))
+    X_tensor = torch.from_numpy(X).float()
+    # calculate_knn returns (N, K+1) including self; col 0 is the point itself
+    all_neighbors = model._prior.calculate_knn(X_tensor)  # (N, K+1)
+    K = args.K if args.K is not None else model._prior.K
+    neighbor_idxs = all_neighbors[query_idx, 1:K+1].numpy()
 
     print(f"Dataset:    {config.dataset}  (N={len(X)}, groups={len(group_names)})")
     print(f"Model:      {model_name}  (K={K})")
     print(f"Query idx:  {query_idx}  → cell type: {group_names[C[query_idx]]}")
-
-    neighbor_idxs = find_knn(Z, query_idx, K)
 
     fig = plot_panel(
         X, C, group_names,
