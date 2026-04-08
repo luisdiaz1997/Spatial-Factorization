@@ -39,7 +39,7 @@ from knn_strategies import (
 OUT_DIR = os.path.join(PANEL2_DIR, "robustness")
 
 KERNEL_LABELS = {
-    "gaussian": "Gaussian",
+    "rbf": "RBF",
     "matern32": "Matérn 3/2",
 }
 NEIGHBOR_COLOR = "#F4A23A"
@@ -153,7 +153,7 @@ def main():
     parser.add_argument("--N-values", type=int, nargs="+", default=[5000, 10000, 40000])
     parser.add_argument("--K", type=int, default=None)
     parser.add_argument("--lengthscale", type=float, default=None)
-    parser.add_argument("--kernel", choices=["gaussian", "matern32"], default="gaussian")
+    parser.add_argument("--kernel", choices=["rbf", "matern32"], default="rbf")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--out", type=str, default=None)
     args = parser.parse_args()

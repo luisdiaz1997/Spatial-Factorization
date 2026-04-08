@@ -1,15 +1,14 @@
 """Kernel density plot over the tissue for a query point.
 
-Single panel (one kernel) or side-by-side comparison (gaussian vs matern32).
 Cells are colored by the kernel value k(x_i, x_query) normalized to [0, 1].
 
 Usage:
-    conda run -n factorization python paper/panel_2/plot_gaussian_density.py \
-        -c configs/slideseq/general.yaml
-    conda run -n factorization python paper/panel_2/plot_gaussian_density.py \
-        -c configs/slideseq/general.yaml --lengthscale 8.0 --kernel both
-    conda run -n factorization python paper/panel_2/plot_gaussian_density.py \
-        -c configs/slideseq/general.yaml --kernel matern32
+    conda run -n factorization python paper/panel_2/plot_density.py \
+        -c configs/slideseq/general.yaml --kernel rbf --lengthscale 8.0
+    conda run -n factorization python paper/panel_2/plot_density.py \
+        -c configs/slideseq/general.yaml --kernel matern32 --lengthscale 8.0
+    conda run -n factorization python paper/panel_2/plot_density.py \
+        -c configs/slideseq/general.yaml --kernel rbf --lengthscale 8.0 --log
 """
 
 import argparse
@@ -21,6 +20,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 import matplotlib.colors as mcolors
+import matplotlib.ticker as mticker
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 PANEL2_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -38,9 +38,8 @@ OUT_DIR = os.path.join(PANEL2_DIR, "density")
 QUERY_COLOR = "#E03030"
 CMAP = "YlOrRd"
 
-
 KERNEL_LABELS = {
-    "gaussian": "Gaussian",
+    "rbf": "RBF",
     "matern32": "Matérn 3/2",
 }
 
@@ -66,7 +65,9 @@ def main():
     parser.add_argument("--model", default=None)
     parser.add_argument("--lengthscale", type=float, default=None)
     parser.add_argument("--query-idx", type=int, default=None)
-    parser.add_argument("--kernel", choices=["gaussian", "matern32"], default="gaussian")
+    parser.add_argument("--kernel", choices=["rbf", "matern32"], default="rbf")
+    parser.add_argument("--log", action="store_true", help="Log color scale")
+    parser.add_argument("--log-vmin", type=float, default=1e-3)
     parser.add_argument("--out", type=str, default=None)
     args = parser.parse_args()
 
@@ -103,28 +104,32 @@ def main():
     print(f"Kernel:      {args.kernel}")
     print(f"Query idx:   {query_idx}  coord: {query_coord}")
 
-    dists = np.linalg.norm(X - query_coord, axis=1)
-    s     = _auto_point_size(N)
-    norm  = mcolors.Normalize(vmin=0.0, vmax=1.0)
-    cmap  = plt.get_cmap(CMAP)
+    if args.log:
+        norm = mcolors.LogNorm(vmin=args.log_vmin, vmax=1.0)
+    else:
+        norm = mcolors.Normalize(vmin=0.0, vmax=1.0)
+    cmap = plt.get_cmap(CMAP)
+    s = _auto_point_size(N)
+    w = kernel_weights(X, query_coord, lengthscale, args.kernel)
 
     fig, ax = plt.subplots(figsize=(6, 6))
-    w = kernel_weights(dists, lengthscale, args.kernel)
     plot_panel(ax, X, w, query_coord, s, norm, cmap, KERNEL_LABELS[args.kernel])
 
-    cb = fig.colorbar(
-        cm.ScalarMappable(cmap=cmap, norm=norm), ax=ax,
-        fraction=0.046, pad=0.04,
-    )
+    mappable = cm.ScalarMappable(cmap=cmap, norm=norm)
+    cb = fig.colorbar(mappable, ax=ax, fraction=0.046, pad=0.04)
     cb.set_label("Kernel weight", fontsize=10)
-    cb.set_ticks([0.0, 0.25, 0.5, 0.75, 1.0])
+    if args.log:
+        cb.ax.yaxis.set_major_locator(mticker.LogLocator())
+        cb.ax.yaxis.set_major_formatter(mticker.LogFormatterMathtext())
+    else:
+        cb.set_ticks([0.0, 0.25, 0.5, 0.75, 1.0])
 
     fig.tight_layout()
 
     dataset_tag = os.path.basename(os.path.normpath(output_dir))
-    kernel_tag  = args.kernel
+    scale_tag = "_log" if args.log else ""
     out_path = args.out or os.path.join(
-        OUT_DIR, f"gaussian_density_{dataset_tag}_{kernel_tag}.png"
+        OUT_DIR, f"density_{dataset_tag}_{args.kernel}{scale_tag}.png"
     )
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     print(f"Saved: {out_path}")
