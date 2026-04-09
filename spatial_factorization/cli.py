@@ -45,9 +45,12 @@ def train(config, resume, video):
 
 @cli.command()
 @click.option("--config", "-c", required=True, type=click.Path(exists=True), help="Path to config YAML")
-def analyze(config):
+@click.option("--probabilistic", is_flag=True, default=False,
+              help="Override saved KNN strategy and use probabilistic neighbor sampling for this analyze run")
+def analyze(config, probabilistic):
     """Analyze a trained model (Moran's I, reconstruction, etc.)."""
-    _run_stage("analyze", config)
+    from .commands import analyze as cmd
+    cmd.run(config, probabilistic=probabilistic)
 
 
 @cli.command()
@@ -120,7 +123,8 @@ def multianalyze(config, models, n_pairs, match_against, output):
 @click.option("--failed", "failed_only", is_flag=True, help="Re-run only jobs that failed in the previous run (reads run_status.json)")
 @click.option("--no-heatmap", is_flag=True, default=False, help="Skip celltype_gene_loadings and factor_gene_loadings heatmaps")
 @click.option("--skip-general", is_flag=True, default=False, help="Skip general configs; run all non-general yamls in the directory as per-model configs")
-def run_pipeline(stages, config, force, dry_run, resume, video, gpu_only, config_name, failed_only, no_heatmap, skip_general):
+@click.option("--probabilistic", is_flag=True, default=False, help="Override saved KNN strategy in analyze stage to use probabilistic neighbor sampling")
+def run_pipeline(stages, config, force, dry_run, resume, video, gpu_only, config_name, failed_only, no_heatmap, skip_general, probabilistic):
     """Run pipeline stages sequentially, or run all models in parallel.
 
     \b
@@ -169,7 +173,7 @@ def run_pipeline(stages, config, force, dry_run, resume, video, gpu_only, config
     if "all" in stages:
         from .runner import JobRunner
 
-        JobRunner(config, force_preprocess=force, dry_run=dry_run, resume=resume, config_name=config_name, failed_only=failed_only, video=video, gpu_only=gpu_only, no_heatmap=no_heatmap, skip_general=skip_general).run()
+        JobRunner(config, force_preprocess=force, dry_run=dry_run, resume=resume, config_name=config_name, failed_only=failed_only, video=video, gpu_only=gpu_only, no_heatmap=no_heatmap, skip_general=skip_general, probabilistic=probabilistic).run()
         return
 
     # Validate stages
@@ -187,7 +191,7 @@ def run_pipeline(stages, config, force, dry_run, resume, video, gpu_only, config
     config_path = _Path(config)
     if config_path.is_dir() or _Config.is_general_config(config_path):
         from .runner import JobRunner
-        JobRunner(config, stages=ordered, force_preprocess=force, dry_run=dry_run, resume=resume, config_name=config_name, failed_only=failed_only, video=video, gpu_only=gpu_only, no_heatmap=no_heatmap, skip_general=skip_general).run()
+        JobRunner(config, stages=ordered, force_preprocess=force, dry_run=dry_run, resume=resume, config_name=config_name, failed_only=failed_only, video=video, gpu_only=gpu_only, no_heatmap=no_heatmap, skip_general=skip_general, probabilistic=probabilistic).run()
         return
 
     # Existing sequential path (single per-model config, no multiplexer)
@@ -202,6 +206,9 @@ def run_pipeline(stages, config, force, dry_run, resume, video, gpu_only, config
         elif stage == "figures":
             from .commands import figures as figures_cmd
             figures_cmd.run(config, no_heatmap=no_heatmap)
+        elif stage == "analyze":
+            from .commands import analyze as analyze_cmd
+            analyze_cmd.run(config, probabilistic=probabilistic)
         else:
             _run_stage(stage, config)
     click.echo(f"\nAll stages complete.")

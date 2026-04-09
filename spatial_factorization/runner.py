@@ -146,6 +146,7 @@ class JobRunner:
         gpu_only: bool = False,
         no_heatmap: bool = False,
         skip_general: bool = False,
+        probabilistic: bool = False,
     ):
         """Initialize the job runner.
 
@@ -172,6 +173,7 @@ class JobRunner:
         self.gpu_only = gpu_only
         self.no_heatmap = no_heatmap
         self.skip_general = skip_general
+        self.probabilistic = probabilistic
         self.jobs: List[Job] = []
         self.run_status = RunStatus()
         self.status_manager = StatusManager()
@@ -676,6 +678,8 @@ class JobRunner:
             cmd.append("--video")
         if "figures" in stages and self.no_heatmap:
             cmd.append("--no-heatmap")
+        if "analyze" in stages and self.probabilistic:
+            cmd.append("--probabilistic")
         cmd += ["-c", str(job.config_path)]
 
         try:
@@ -720,6 +724,8 @@ class JobRunner:
         ]
         if stage == "figures" and self.no_heatmap:
             cmd.append("--no-heatmap")
+        if stage == "analyze" and self.probabilistic:
+            cmd.append("--probabilistic")
 
         env = dict(os.environ)
         if force_cpu:

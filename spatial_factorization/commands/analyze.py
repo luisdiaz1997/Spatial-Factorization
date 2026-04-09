@@ -32,7 +32,7 @@ from ..config import Config
 from ..datasets.base import load_preprocessed
 
 
-def _load_model(model_dir: Path):
+def _load_model(model_dir: Path, neighbors_override: str | None = None):
     """Load trained PNMF model from pickle or torch state dict.
 
     For spatial models, pickle fails due to MGGPWrapper, so we reconstruct
@@ -151,7 +151,7 @@ def _load_model(model_dir: Path):
 
             # Set KNN indices (needed for LCGP forward pass + KL divergence)
             from gpzoo.knn_utilities import calculate_knn
-            neighbors_strategy = hyperparams.get("neighbors", "knn")
+            neighbors_strategy = neighbors_override or hyperparams.get("neighbors", "knn")
             raw = calculate_knn(
                 gp, Z, strategy=neighbors_strategy,
                 multigroup=is_multigroup,
@@ -650,7 +650,7 @@ def _compute_moran_i(factors: np.ndarray, coords: np.ndarray) -> tuple:
         return idx, df["I"].to_numpy()
 
 
-def run(config_path: str):
+def run(config_path: str, probabilistic: bool = False):
     """Analyze a trained PNMF model.
 
     Output files (outputs/{dataset}/{model}/):
@@ -674,7 +674,9 @@ def run(config_path: str):
 
     # Load trained model
     print(f"Loading trained model from: {model_dir}/")
-    model = _load_model(model_dir)
+    if probabilistic:
+        print("[--probabilistic] Overriding KNN strategy to 'probabilistic' for this analyze run")
+    model = _load_model(model_dir, neighbors_override="probabilistic" if probabilistic else None)
     _print_model_summary(model)
 
     # Extract factors (for spatial models, pass coordinates and optionally groups)
