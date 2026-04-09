@@ -46,6 +46,7 @@ def _save_model(model, config: Config, model_dir: Path) -> None:
         state["hyperparameters"]["local"] = config.local
         if config.local:
             state["hyperparameters"]["K"] = config.model.get("K", 50)
+            state["hyperparameters"]["neighbors"] = config.model.get("neighbors", "knn")
 
     torch.save(state, model_dir / "model.pth")
 
@@ -286,7 +287,8 @@ def run(config_path: str, resume: bool = False, video: bool = False):
         print(f"  spatial=True, prior={config.prior}, groups={config.groups}, local={config.local}")
         if config.local:
             K = config.model.get('K', 50)
-            print(f"  LCGP: K={K}")
+            neighbors = config.model.get('neighbors', 'knn')
+            print(f"  LCGP: K={K}, neighbors={neighbors}")
         else:
             print(f"  Inducing points (M): {pnmf_kwargs.get('num_inducing', 3000)}")
         print(f"  Kernel: {config.model.get('kernel', 'Matern32')} (lengthscale={config.model.get('lengthscale', 1.0)})")

@@ -61,6 +61,7 @@ LCGP_MODEL_FIELDS = {
     "local",
     "K",
     "precompute_knn",
+    "neighbors",
 }
 
 

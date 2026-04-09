@@ -1,5 +1,7 @@
 # Spatial Factorization Development Notes
 
+**NEVER DELETE AN OUTPUT UNDER ANY CIRCUMSTANCE UNLESS I EXPLICITLY ASK FOR IT.**
+
 ---
 
 ## Environment Setup

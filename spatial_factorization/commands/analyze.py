@@ -149,12 +149,24 @@ def _load_model(model_dir: Path):
             gp.load_state_dict(prior_sd)
             model._prior = gp
 
-            # Set KNN indices (needed for LCGP forward pass)
-            gp.knn_idx = gp.calculate_knn(Z)[:, :-1]  # exclude self
-            gp.knn_idz = gp.knn_idx
+            # Set KNN indices (needed for LCGP forward pass + KL divergence)
+            from gpzoo.knn_utilities import calculate_knn
+            neighbors_strategy = hyperparams.get("neighbors", "knn")
+            raw = calculate_knn(
+                gp, Z, strategy=neighbors_strategy,
+                multigroup=is_multigroup,
+                groupsX=groupsZ if is_multigroup else None,
+                groupsZ=groupsZ if is_multigroup else None,
+            )  # (N, K+1)
+            gp.knn_idx = raw[:, :-1]   # self-inclusive — inference (forward pass)
+            gp.knn_idz = raw[:, 1:]    # self-exclusive — KL divergence
 
-            # Mark model as local (for transform functions)
+            # Mark model as local and propagate neighbors strategy
             model.local = True
+            model.neighbors = neighbors_strategy
+            model.multigroup = is_multigroup
+            # Needed by transforms._get_spatial_qF when calling probabilistic KNN
+            model._groups = groupsZ if is_multigroup else None
 
         else:
             # SVGP/MGGP_SVGP reconstruction path

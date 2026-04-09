@@ -142,6 +142,7 @@ class Config:
                 # LCGP-specific params
                 kwargs["K"] = self.model.get("K", 50)
                 kwargs["precompute_knn"] = self.model.get("precompute_knn", True)
+                kwargs["neighbors"] = self.model.get("neighbors", "knn")
             else:
                 # SVGP-specific params (not used by LCGP)
                 kwargs["num_inducing"] = self.model.get("num_inducing", 3000)
