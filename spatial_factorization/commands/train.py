@@ -44,6 +44,9 @@ def _save_model(model, config: Config, model_dir: Path) -> None:
         state["hyperparameters"]["prior"] = config.prior
         state["hyperparameters"]["multigroup"] = config.groups
         state["hyperparameters"]["local"] = config.local
+        if config.local:
+            state["hyperparameters"]["K"] = config.model.get("K", 50)
+            state["hyperparameters"]["neighbors"] = config.model.get("neighbors", "knn")
 
     torch.save(state, model_dir / "model.pth")
 
@@ -86,6 +89,19 @@ def _create_warm_start_pnmf(loaded_model, config: Config, pnmf_kwargs: dict):
     if config.spatial:
         loaded_prior = loaded_model._prior
 
+        # Replicate PNMF's parameter freezing that normally happens inside
+        # _create_spatial_prior (models.py lines 686-757). When loading from
+        # .pth, requires_grad flags are not preserved (state dicts save values
+        # only), so we must re-apply them here before the optimizer is built.
+        loaded_prior.Z.requires_grad_(False)
+        if hasattr(loaded_prior, 'groupsZ') and isinstance(loaded_prior.groupsZ, torch.nn.Parameter):
+            loaded_prior.groupsZ.requires_grad_(False)
+        loaded_prior.kernel.sigma.requires_grad_(False)
+        if not config.training.get("train_lengthscale", False):
+            loaded_prior.kernel.lengthscale.requires_grad_(False)
+        if hasattr(loaded_prior.kernel, 'group_diff_param'):
+            loaded_prior.kernel.group_diff_param.requires_grad_(False)
+
         class _WarmStartPNMF(PNMF):
             def _create_spatial_prior(self, Y, coordinates, groups):
                 return loaded_prior
@@ -118,6 +134,29 @@ def _create_warm_start_pnmf(loaded_model, config: Config, pnmf_kwargs: dict):
         return _WarmStartPNMF(**pnmf_kwargs)
 
 
+def _clamp_data_dims(kwargs: dict, N: int, D: int) -> dict:
+    """Clamp num_inducing, batch_size, y_batch_size to actual data dimensions."""
+    if kwargs.get("num_inducing") is not None:
+        clamped = min(kwargs["num_inducing"], N)
+        if clamped < kwargs["num_inducing"]:
+            print(f"  Note: num_inducing clamped {kwargs['num_inducing']} → {clamped} (N={N})")
+        kwargs["num_inducing"] = clamped
+
+    if kwargs.get("batch_size") is not None:
+        clamped = min(kwargs["batch_size"], N)
+        if clamped < kwargs["batch_size"]:
+            print(f"  Note: batch_size clamped {kwargs['batch_size']} → {clamped} (N={N})")
+        kwargs["batch_size"] = clamped
+
+    if kwargs.get("y_batch_size") is not None:
+        clamped = min(kwargs["y_batch_size"], D)
+        if clamped < kwargs["y_batch_size"]:
+            print(f"  Note: y_batch_size clamped {kwargs['y_batch_size']} → {clamped} (D={D})")
+        kwargs["y_batch_size"] = clamped
+
+    return kwargs
+
+
 def _get_training_metadata(model, config: Config, data, train_time: float, prev_n_iterations: int = 0) -> dict:
     """Build training metadata dict."""
     return {
@@ -138,7 +177,41 @@ def _get_training_metadata(model, config: Config, data, train_time: float, prev_
     }
 
 
-def run(config_path: str, resume: bool = False):
+def _make_video_callback(config: Config, data, video_interval: int, frames: list, frame_iters: list):
+    """Return a callback that captures factor snapshots during training."""
+    import torch
+
+    def callback(model, iteration, elbo_value):
+        with torch.no_grad():
+            if config.spatial:
+                # Run GP predictive pass on all training coords (batched to avoid OOM)
+                from PNMF.transforms import _get_spatial_qF
+                coords_np = data.X.numpy()
+                groups_np = data.groups.numpy() if config.groups else None
+                chunk = 10000
+                N = coords_np.shape[0]
+                chunks_F = []
+                for start in range(0, N, chunk):
+                    coords_b = torch.from_numpy(coords_np[start:start + chunk]).to(model._get_device())
+                    groups_b = (
+                        torch.from_numpy(groups_np[start:start + chunk]).to(model._get_device())
+                        if groups_np is not None else None
+                    )
+                    qF = _get_spatial_qF(model, coordinates=coords_b, groups=groups_b)
+                    chunks_F.append(torch.exp(qF.mean.detach().cpu()).T)  # (chunk, L)
+                F = torch.cat(chunks_F, dim=0).numpy()  # (N, L)
+            else:
+                # Non-spatial: exp(prior.mean) transposed
+                F = torch.exp(model._prior.mean.detach().cpu()).T.numpy()  # (N, L)
+
+        frames.append(F)
+        frame_iters.append(iteration)
+
+    return callback
+
+
+
+def run(config_path: str, resume: bool = False, video: bool = False, probabilistic: bool = False):
     """Train a PNMF model from config.
 
     Output files (outputs/{dataset}/{model}/):
@@ -149,6 +222,16 @@ def run(config_path: str, resume: bool = False):
         config.yaml        - Copy of config used
     """
     config = Config.from_yaml(config_path)
+
+    # --probabilistic overrides the KNN strategy for LCGP training. Mutate the
+    # config so to_pnmf_kwargs passes neighbors=probabilistic to PNMF and the
+    # saved hyperparameters reflect the strategy actually used.
+    if probabilistic:
+        if config.local:
+            config.model["neighbors"] = "probabilistic"
+            print("[--probabilistic] Overriding KNN strategy to 'probabilistic' for training")
+        else:
+            print("[--probabilistic] Ignored: only affects LCGP (local=True) training")
 
     # Set random seeds
     torch.manual_seed(config.seed)
@@ -165,6 +248,9 @@ def run(config_path: str, resume: bool = False):
     mode = config.model.get("mode", "expanded")
     device = config.training.get("device", "cpu")
 
+    # Clamp model/training params to actual data dimensions
+    pnmf_kwargs = _clamp_data_dims(config.to_pnmf_kwargs(), data.n_spots, data.n_genes)
+
     # Determine model output directory early (needed for resume)
     model_dir = output_dir / config.model_name
 
@@ -173,13 +259,13 @@ def run(config_path: str, resume: bool = False):
     if resume:
         pth_path = model_dir / "model.pth"
         if not pth_path.exists():
-            raise FileNotFoundError(
-                f"No saved model found at {pth_path}. "
-                "Cannot resume. Run without --resume to train from scratch."
-            )
+            print(f"  Note: no checkpoint at {pth_path}, training from scratch.")
+            resume = False
+
+    if resume:
         print(f"Resuming training from: {model_dir}/")
         from .analyze import _load_model
-        loaded_model = _load_model(model_dir)
+        loaded_model = _load_model(model_dir, neighbors_override="probabilistic" if probabilistic else None)
 
         # Track previous iteration count for cumulative metadata
         training_json = model_dir / "training.json"
@@ -189,11 +275,21 @@ def run(config_path: str, resume: bool = False):
             prev_n_iterations = prev_meta.get("n_iterations", 0)
         print(f"  Previous iterations: {prev_n_iterations}")
 
-        model = _create_warm_start_pnmf(loaded_model, config, config.to_pnmf_kwargs())
+        model = _create_warm_start_pnmf(loaded_model, config, pnmf_kwargs)
         print(f"Continuing PNMF with {n_components} components (mode={mode}, device={device})...")
     else:
-        model = PNMF(random_state=config.seed, **config.to_pnmf_kwargs())
+        model = PNMF(random_state=config.seed, **pnmf_kwargs)
         print(f"Training PNMF with {n_components} components (mode={mode}, device={device})...")
+
+    # Build optional video callback
+    video_frames = []
+    video_frame_iters = []
+    video_interval = config.training.get("video_interval", 20)
+    if video:
+        print(f"  Video mode: capturing frames every {video_interval} iterations")
+        video_callback = _make_video_callback(config, data, video_interval, video_frames, video_frame_iters)
+    else:
+        video_callback = None
 
     # Train (spatial models require coordinates; groups are optional)
     t0 = time.perf_counter()
@@ -201,9 +297,10 @@ def run(config_path: str, resume: bool = False):
         print(f"  spatial=True, prior={config.prior}, groups={config.groups}, local={config.local}")
         if config.local:
             K = config.model.get('K', 50)
-            print(f"  LCGP: K={K}")
+            neighbors = config.model.get('neighbors', 'knn')
+            print(f"  LCGP: K={K}, neighbors={neighbors}")
         else:
-            print(f"  Inducing points (M): {config.model.get('num_inducing', 3000)}")
+            print(f"  Inducing points (M): {pnmf_kwargs.get('num_inducing', 3000)}")
         print(f"  Kernel: {config.model.get('kernel', 'Matern32')} (lengthscale={config.model.get('lengthscale', 1.0)})")
 
         fit_kwargs = dict(
@@ -212,10 +309,17 @@ def run(config_path: str, resume: bool = False):
         )
         if config.groups:
             fit_kwargs["groups"] = data.groups.numpy()
+        if video_callback is not None:
+            fit_kwargs["callback"] = video_callback
+            fit_kwargs["callback_interval"] = video_interval
 
         elbo_history, model = model.fit(data.Y.numpy(), **fit_kwargs)
     else:
-        elbo_history, model = model.fit(data.Y.numpy(), return_history=True)
+        fit_kwargs = dict(return_history=True)
+        if video_callback is not None:
+            fit_kwargs["callback"] = video_callback
+            fit_kwargs["callback_interval"] = video_interval
+        elbo_history, model = model.fit(data.Y.numpy(), **fit_kwargs)
     train_time = time.perf_counter() - t0
 
     if resume:
@@ -233,6 +337,13 @@ def run(config_path: str, resume: bool = False):
     # Save outputs
     model_dir.mkdir(parents=True, exist_ok=True)
     _save_model(model, config, model_dir)
+
+    # Save video frames if captured (analyze will reorder, figures will render GIF)
+    if video and video_frames:
+        frames_arr = np.stack(video_frames, axis=0)  # (n_frames, N, L)
+        np.save(model_dir / "video_frames.npy", frames_arr)
+        np.save(model_dir / "video_frame_iters.npy", np.array(video_frame_iters))
+        print(f"\nSaved {len(video_frames)} video frames to {model_dir}/video_frames.npy")
 
     if resume:
         _append_elbo_history(elbo_history, model_dir)

@@ -1,0 +1,557 @@
+{
+  "start_time": "2026-03-24T17:49:07.830773",
+  "end_time": "2026-03-24T18:42:19.289821",
+  "elapsed_seconds": 3191.459048,
+  "jobs": {
+    "liver_test_healthy_pnmf": {
+      "config_path": "configs/liver/healthy/pnmf.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_healthy_svgp": {
+      "config_path": "configs/liver/healthy/svgp.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_healthy_mggp_svgp": {
+      "config_path": "configs/liver/healthy/mggp_svgp.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_healthy_lcgp": {
+      "config_path": "configs/liver/healthy/lcgp.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_healthy_mggp_lcgp": {
+      "config_path": "configs/liver/healthy/mggp_lcgp.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_diseased_pnmf": {
+      "config_path": "configs/liver/diseased/pnmf.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_diseased_svgp": {
+      "config_path": "configs/liver/diseased/svgp.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_diseased_mggp_svgp": {
+      "config_path": "configs/liver/diseased/mggp_svgp.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_diseased_lcgp": {
+      "config_path": "configs/liver/diseased/lcgp.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_diseased_mggp_lcgp": {
+      "config_path": "configs/liver/diseased/mggp_lcgp.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_diseased_AM031_pnmf": {
+      "config_path": "configs/liver/diseased/AM031/pnmf.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_diseased_AM031_svgp": {
+      "config_path": "configs/liver/diseased/AM031/svgp.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_diseased_AM031_mggp_svgp": {
+      "config_path": "configs/liver/diseased/AM031/mggp_svgp.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_diseased_AM031_lcgp": {
+      "config_path": "configs/liver/diseased/AM031/lcgp.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_diseased_AM031_mggp_lcgp": {
+      "config_path": "configs/liver/diseased/AM031/mggp_lcgp.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_diseased_AM042_pnmf": {
+      "config_path": "configs/liver/diseased/AM042/pnmf.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_diseased_AM042_svgp": {
+      "config_path": "configs/liver/diseased/AM042/svgp.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_diseased_AM042_mggp_svgp": {
+      "config_path": "configs/liver/diseased/AM042/mggp_svgp.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_diseased_AM042_lcgp": {
+      "config_path": "configs/liver/diseased/AM042/lcgp.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_diseased_AM042_mggp_lcgp": {
+      "config_path": "configs/liver/diseased/AM042/mggp_lcgp.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_diseased_AM048_pnmf": {
+      "config_path": "configs/liver/diseased/AM048/pnmf.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_diseased_AM048_svgp": {
+      "config_path": "configs/liver/diseased/AM048/svgp.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_diseased_AM048_mggp_svgp": {
+      "config_path": "configs/liver/diseased/AM048/mggp_svgp.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_diseased_AM048_lcgp": {
+      "config_path": "configs/liver/diseased/AM048/lcgp.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_diseased_AM048_mggp_lcgp": {
+      "config_path": "configs/liver/diseased/AM048/mggp_lcgp.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_diseased_AM061_pnmf": {
+      "config_path": "configs/liver/diseased/AM061/pnmf.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_diseased_AM061_svgp": {
+      "config_path": "configs/liver/diseased/AM061/svgp.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_diseased_AM061_mggp_svgp": {
+      "config_path": "configs/liver/diseased/AM061/mggp_svgp.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_diseased_AM061_lcgp": {
+      "config_path": "configs/liver/diseased/AM061/lcgp.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_diseased_AM061_mggp_lcgp": {
+      "config_path": "configs/liver/diseased/AM061/mggp_lcgp.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_diseased_AM062_pnmf": {
+      "config_path": "configs/liver/diseased/AM062/pnmf.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_diseased_AM062_svgp": {
+      "config_path": "configs/liver/diseased/AM062/svgp.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_diseased_AM062_mggp_svgp": {
+      "config_path": "configs/liver/diseased/AM062/mggp_svgp.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_diseased_AM062_lcgp": {
+      "config_path": "configs/liver/diseased/AM062/lcgp.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_diseased_AM062_mggp_lcgp": {
+      "config_path": "configs/liver/diseased/AM062/mggp_lcgp.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_diseased_AM072_pnmf": {
+      "config_path": "configs/liver/diseased/AM072/pnmf.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_diseased_AM072_svgp": {
+      "config_path": "configs/liver/diseased/AM072/svgp.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_diseased_AM072_mggp_svgp": {
+      "config_path": "configs/liver/diseased/AM072/mggp_svgp.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_diseased_AM072_lcgp": {
+      "config_path": "configs/liver/diseased/AM072/lcgp.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_diseased_AM072_mggp_lcgp": {
+      "config_path": "configs/liver/diseased/AM072/mggp_lcgp.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_healthy_AM042_pnmf": {
+      "config_path": "configs/liver/healthy/AM042/pnmf.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_healthy_AM042_svgp": {
+      "config_path": "configs/liver/healthy/AM042/svgp.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_healthy_AM042_mggp_svgp": {
+      "config_path": "configs/liver/healthy/AM042/mggp_svgp.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_healthy_AM042_lcgp": {
+      "config_path": "configs/liver/healthy/AM042/lcgp.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_healthy_AM042_mggp_lcgp": {
+      "config_path": "configs/liver/healthy/AM042/mggp_lcgp.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_healthy_AM048_pnmf": {
+      "config_path": "configs/liver/healthy/AM048/pnmf.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_healthy_AM048_svgp": {
+      "config_path": "configs/liver/healthy/AM048/svgp.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_healthy_AM048_mggp_svgp": {
+      "config_path": "configs/liver/healthy/AM048/mggp_svgp.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_healthy_AM048_lcgp": {
+      "config_path": "configs/liver/healthy/AM048/lcgp.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_healthy_AM048_mggp_lcgp": {
+      "config_path": "configs/liver/healthy/AM048/mggp_lcgp.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_healthy_AM061_pnmf": {
+      "config_path": "configs/liver/healthy/AM061/pnmf.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_healthy_AM061_svgp": {
+      "config_path": "configs/liver/healthy/AM061/svgp.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_healthy_AM061_mggp_svgp": {
+      "config_path": "configs/liver/healthy/AM061/mggp_svgp.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_healthy_AM061_lcgp": {
+      "config_path": "configs/liver/healthy/AM061/lcgp.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_test_healthy_AM061_mggp_lcgp": {
+      "config_path": "configs/liver/healthy/AM061/mggp_lcgp.yaml",
+      "status": "failed",
+      "error": "interrupted"
+    },
+    "liver_healthy_pnmf": {
+      "config_path": "configs/liver/healthy/pnmf.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_healthy_svgp": {
+      "config_path": "configs/liver/healthy/svgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_healthy_mggp_svgp": {
+      "config_path": "configs/liver/healthy/mggp_svgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_healthy_lcgp": {
+      "config_path": "configs/liver/healthy/lcgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_healthy_mggp_lcgp": {
+      "config_path": "configs/liver/healthy/mggp_lcgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_diseased_pnmf": {
+      "config_path": "configs/liver/diseased/pnmf.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_diseased_svgp": {
+      "config_path": "configs/liver/diseased/svgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_diseased_mggp_svgp": {
+      "config_path": "configs/liver/diseased/mggp_svgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_diseased_lcgp": {
+      "config_path": "configs/liver/diseased/lcgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_diseased_mggp_lcgp": {
+      "config_path": "configs/liver/diseased/mggp_lcgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_diseased_AM031_pnmf": {
+      "config_path": "configs/liver/diseased/AM031/pnmf.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_diseased_AM031_svgp": {
+      "config_path": "configs/liver/diseased/AM031/svgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_diseased_AM031_mggp_svgp": {
+      "config_path": "configs/liver/diseased/AM031/mggp_svgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_diseased_AM031_lcgp": {
+      "config_path": "configs/liver/diseased/AM031/lcgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_diseased_AM031_mggp_lcgp": {
+      "config_path": "configs/liver/diseased/AM031/mggp_lcgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_diseased_AM042_pnmf": {
+      "config_path": "configs/liver/diseased/AM042/pnmf.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_diseased_AM042_svgp": {
+      "config_path": "configs/liver/diseased/AM042/svgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_diseased_AM042_mggp_svgp": {
+      "config_path": "configs/liver/diseased/AM042/mggp_svgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_diseased_AM042_lcgp": {
+      "config_path": "configs/liver/diseased/AM042/lcgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_diseased_AM042_mggp_lcgp": {
+      "config_path": "configs/liver/diseased/AM042/mggp_lcgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_diseased_AM048_pnmf": {
+      "config_path": "configs/liver/diseased/AM048/pnmf.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_diseased_AM048_svgp": {
+      "config_path": "configs/liver/diseased/AM048/svgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_diseased_AM048_mggp_svgp": {
+      "config_path": "configs/liver/diseased/AM048/mggp_svgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_diseased_AM048_lcgp": {
+      "config_path": "configs/liver/diseased/AM048/lcgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_diseased_AM048_mggp_lcgp": {
+      "config_path": "configs/liver/diseased/AM048/mggp_lcgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_diseased_AM061_pnmf": {
+      "config_path": "configs/liver/diseased/AM061/pnmf.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_diseased_AM061_svgp": {
+      "config_path": "configs/liver/diseased/AM061/svgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_diseased_AM061_mggp_svgp": {
+      "config_path": "configs/liver/diseased/AM061/mggp_svgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_diseased_AM061_lcgp": {
+      "config_path": "configs/liver/diseased/AM061/lcgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_diseased_AM061_mggp_lcgp": {
+      "config_path": "configs/liver/diseased/AM061/mggp_lcgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_diseased_AM062_pnmf": {
+      "config_path": "configs/liver/diseased/AM062/pnmf.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_diseased_AM062_svgp": {
+      "config_path": "configs/liver/diseased/AM062/svgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_diseased_AM062_mggp_svgp": {
+      "config_path": "configs/liver/diseased/AM062/mggp_svgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_diseased_AM062_lcgp": {
+      "config_path": "configs/liver/diseased/AM062/lcgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_diseased_AM062_mggp_lcgp": {
+      "config_path": "configs/liver/diseased/AM062/mggp_lcgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_diseased_AM072_pnmf": {
+      "config_path": "configs/liver/diseased/AM072/pnmf.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_diseased_AM072_svgp": {
+      "config_path": "configs/liver/diseased/AM072/svgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_diseased_AM072_mggp_svgp": {
+      "config_path": "configs/liver/diseased/AM072/mggp_svgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_diseased_AM072_lcgp": {
+      "config_path": "configs/liver/diseased/AM072/lcgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_diseased_AM072_mggp_lcgp": {
+      "config_path": "configs/liver/diseased/AM072/mggp_lcgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_healthy_AM042_pnmf": {
+      "config_path": "configs/liver/healthy/AM042/pnmf.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_healthy_AM042_svgp": {
+      "config_path": "configs/liver/healthy/AM042/svgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_healthy_AM042_mggp_svgp": {
+      "config_path": "configs/liver/healthy/AM042/mggp_svgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_healthy_AM042_lcgp": {
+      "config_path": "configs/liver/healthy/AM042/lcgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_healthy_AM042_mggp_lcgp": {
+      "config_path": "configs/liver/healthy/AM042/mggp_lcgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_healthy_AM048_pnmf": {
+      "config_path": "configs/liver/healthy/AM048/pnmf.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_healthy_AM048_svgp": {
+      "config_path": "configs/liver/healthy/AM048/svgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_healthy_AM048_mggp_svgp": {
+      "config_path": "configs/liver/healthy/AM048/mggp_svgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_healthy_AM048_lcgp": {
+      "config_path": "configs/liver/healthy/AM048/lcgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_healthy_AM048_mggp_lcgp": {
+      "config_path": "configs/liver/healthy/AM048/mggp_lcgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_healthy_AM061_pnmf": {
+      "config_path": "configs/liver/healthy/AM061/pnmf.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_healthy_AM061_svgp": {
+      "config_path": "configs/liver/healthy/AM061/svgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_healthy_AM061_mggp_svgp": {
+      "config_path": "configs/liver/healthy/AM061/mggp_svgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_healthy_AM061_lcgp": {
+      "config_path": "configs/liver/healthy/AM061/lcgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "liver_healthy_AM061_mggp_lcgp": {
+      "config_path": "configs/liver/healthy/AM061/mggp_lcgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    }
+  }
+}

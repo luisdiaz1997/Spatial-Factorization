@@ -32,7 +32,7 @@ from ..config import Config
 from ..datasets.base import load_preprocessed
 
 
-def _load_model(model_dir: Path):
+def _load_model(model_dir: Path, neighbors_override: str | None = None):
     """Load trained PNMF model from pickle or torch state dict.
 
     For spatial models, pickle fails due to MGGPWrapper, so we reconstruct
@@ -101,7 +101,7 @@ def _load_model(model_dir: Path):
             is_multigroup = hyperparams.get("multigroup", False)
 
         # Detect LCGP vs SVGP from state dict
-        # LCGP has raw "Lu" parameter (L, M, K); SVGP has "Lu._raw" from CholeskyParameter
+        # LCGP has raw "Lu" parameter (L, M, R); SVGP has "Lu._raw" from CholeskyParameter
         is_lcgp = "Lu" in prior_sd and "Lu._raw" not in prior_sd
 
         if is_lcgp:
@@ -109,7 +109,15 @@ def _load_model(model_dir: Path):
             from gpzoo.gp import LCGP, MGGP_LCGP
             from gpzoo.kernels import batched_Matern32, batched_MGGP_Matern32
 
-            K = hyperparams.get("K", 50)
+            K = hyperparams.get("K")
+            if K is None:
+                import warnings
+                warnings.warn(
+                    "Checkpoint is missing 'K' in hyperparameters (saved before K was persisted). "
+                    "Defaulting to K=50. If state_dict loading fails, retrain to update checkpoint.",
+                    UserWarning,
+                )
+                K = 50
 
             if is_multigroup:
                 groupsZ = prior_sd["groupsZ"]      # (M,)
@@ -130,21 +138,35 @@ def _load_model(model_dir: Path):
                     jitter=1e-5, K=K,
                 )
 
-            # Replace Lu with raw nn.Parameter matching saved shape (L, M, K)
+            # Replace Lu with raw nn.Parameter matching saved shape (L, M, R)
+            # R may differ from K when estimate_lcgp_rank clamps to a smaller value
+            R = prior_sd["Lu"].shape[-1]
             del gp.Lu
-            gp.Lu = nn.Parameter(torch.randn(L, M, K))
+            gp.Lu = nn.Parameter(torch.randn(L, M, R))
             gp.mu = nn.Parameter(torch.randn(L, M))
 
             # Load the trained prior state
             gp.load_state_dict(prior_sd)
             model._prior = gp
 
-            # Set KNN indices (needed for LCGP forward pass)
-            gp.knn_idx = gp.calculate_knn(Z)[:, :-1]  # exclude self
-            gp.knn_idz = gp.knn_idx
+            # Set KNN indices (needed for LCGP forward pass + KL divergence)
+            from gpzoo.knn_utilities import calculate_knn
+            neighbors_strategy = neighbors_override or hyperparams.get("neighbors", "knn")
+            raw = calculate_knn(
+                gp, Z, strategy=neighbors_strategy,
+                multigroup=is_multigroup,
+                groupsX=groupsZ if is_multigroup else None,
+                groupsZ=groupsZ if is_multigroup else None,
+            )  # (N, K+1)
+            gp.knn_idx = raw[:, :-1]   # self-inclusive — inference (forward pass)
+            gp.knn_idz = raw[:, 1:]    # self-exclusive — KL divergence
 
-            # Mark model as local (for transform functions)
+            # Mark model as local and propagate neighbors strategy
             model.local = True
+            model.neighbors = neighbors_strategy
+            model.multigroup = is_multigroup
+            # Needed by transforms._get_spatial_qF when calling probabilistic KNN
+            model._groups = groupsZ if is_multigroup else None
 
         else:
             # SVGP/MGGP_SVGP reconstruction path
@@ -265,23 +287,57 @@ def _print_model_summary(model):
             print(f"  Groups:             {n_groups}")
 
 
-def _compute_reconstruction_error(model, Y: np.ndarray, coordinates=None, groups=None) -> float:
+def _get_factors_batched(model, coords: np.ndarray, groups, batch_size: int = 10000):
+    """Get factors and scales from a spatial model in batches to avoid OOM.
+
+    For SVGP, each batch avoids materialising the full (L, N, M) kernel matrix.
+    For LCGP, each batch avoids the full (L, N, K, K) Su_knn tensor.
+
+    KNN for LCGP is computed against the full stored gp.Z (all training points),
+    so batching X is semantically correct — only the memory footprint shrinks.
+
+    Returns:
+        factors: (N, L) exp-space factor means
+        scales:  (N, L) factor standard deviations
+    """
+    from PNMF.transforms import _get_spatial_qF
+
+    N = coords.shape[0]
+    all_means: list = []
+    all_scales: list = []
+
+    for start in range(0, N, batch_size):
+        end = min(start + batch_size, N)
+        coords_b = coords[start:end]
+        groups_b = groups[start:end] if groups is not None else None
+        qF = _get_spatial_qF(model, coordinates=coords_b, groups=groups_b)
+        all_means.append(torch.exp(qF.mean.detach().cpu()).T)   # (chunk, L)
+        all_scales.append(qF.scale.detach().cpu().T)             # (chunk, L)
+
+    factors = torch.cat(all_means, dim=0).numpy()   # (N, L)
+    scales  = torch.cat(all_scales, dim=0).numpy()  # (N, L)
+    return factors, scales
+
+
+def _compute_reconstruction_error(model, Y: np.ndarray, F: np.ndarray = None,
+                                   coordinates=None, groups=None) -> float:
     """Compute relative Frobenius norm reconstruction error.
 
     Args:
         model: Fitted PNMF model
         Y: Original data (N, D)
-        coordinates: Spatial coordinates (for spatial models)
-        groups: Group labels (for spatial models)
+        F: Pre-computed (N, L) exp-space factors. If None, computed from model.
+        coordinates: Spatial coordinates (used only when F is None)
+        groups: Group labels (used only when F is None)
 
     Returns:
         Relative error: ||Y - Y_hat||_F / ||Y||_F
     """
-    # Get factors and loadings
-    if coordinates is not None:
-        F = get_factors(model, use_mgf=False, coordinates=coordinates, groups=groups)
-    else:
-        F = get_factors(model, use_mgf=False)  # (N, L) - exp(μ)
+    if F is None:
+        if coordinates is not None:
+            F = get_factors(model, use_mgf=False, coordinates=coordinates, groups=groups)
+        else:
+            F = get_factors(model, use_mgf=False)  # (N, L) - exp(μ)
     # components_ is (L, D), so we need (N, L) @ (L, D) = (N, D)
     Y_reconstructed = F @ model.components_  # (N, L) @ (L, D) = (N, D)
 
@@ -290,7 +346,8 @@ def _compute_reconstruction_error(model, Y: np.ndarray, coordinates=None, groups
     return float(error)
 
 
-def _compute_poisson_deviance(model, Y: np.ndarray, coordinates=None, groups=None) -> dict:
+def _compute_poisson_deviance(model, Y: np.ndarray, F: np.ndarray = None,
+                               coordinates=None, groups=None) -> dict:
     """Compute Poisson deviance (KL divergence) for goodness-of-fit.
 
     D(V_true || V_reconstruct) = sum_ij (V_ij * log(V_ij / mu_ij) - V_ij + mu_ij)
@@ -300,8 +357,9 @@ def _compute_poisson_deviance(model, Y: np.ndarray, coordinates=None, groups=Non
     Args:
         model: Fitted PNMF model
         Y: Original data (N, D)
-        coordinates: Spatial coordinates (for spatial models)
-        groups: Group labels (for spatial models)
+        F: Pre-computed (N, L) exp-space factors. If None, computed from model.
+        coordinates: Spatial coordinates (used only when F is None)
+        groups: Group labels (used only when F is None)
 
     Returns:
         Dictionary with deviance metrics:
@@ -310,10 +368,13 @@ def _compute_poisson_deviance(model, Y: np.ndarray, coordinates=None, groups=Non
         - mean_per_gene: Mean deviance per gene (averaged over spots)
     """
     # Get reconstruction
-    if coordinates is not None:
-        factors = get_factors(model, use_mgf=False, coordinates=coordinates, groups=groups)
+    if F is None:
+        if coordinates is not None:
+            factors = get_factors(model, use_mgf=False, coordinates=coordinates, groups=groups)
+        else:
+            factors = get_factors(model, use_mgf=False)  # (N, L) - exp(μ)
     else:
-        factors = get_factors(model, use_mgf=False)  # (N, L) - exp(μ)
+        factors = F
     mu = factors @ model.components_  # (N, L) @ (L, D) = (N, D)
 
     # Ensure mu > 0 for numerical stability
@@ -345,7 +406,8 @@ def _compute_poisson_deviance(model, Y: np.ndarray, coordinates=None, groups=Non
 
 
 def _compute_group_loadings(
-    model, Y: np.ndarray, groups: np.ndarray, coordinates=None, gp_groups=None,
+    model, Y: np.ndarray, groups: np.ndarray, F: np.ndarray = None,
+    coordinates=None, gp_groups=None,
     max_iter: int = 1000, verbose: bool = False,
 ) -> dict:
     """Compute group-specific loadings using PNMF's transform_W.
@@ -359,7 +421,8 @@ def _compute_group_loadings(
         model: Fitted PNMF model
         Y: Count matrix (N, D)
         groups: Group labels (N,) for subsetting data by cell-type
-        coordinates: Spatial coordinates (for spatial models)
+        F: Pre-computed (N, L) exp-space factors. If None, computed from model.
+        coordinates: Spatial coordinates (used only when F is None)
         gp_groups: Group labels for GP conditioning (only for multigroup models).
             Pass None for non-multigroup spatial models (SVGP without groups).
         max_iter: Maximum iterations for transform_W optimization
@@ -371,10 +434,11 @@ def _compute_group_loadings(
         - reconstruction_error: dict mapping group_id -> relative error
     """
     # Get exp-space latent factors (N, L)
-    if coordinates is not None:
-        F = get_factors(model, use_mgf=False, coordinates=coordinates, groups=gp_groups)
-    else:
-        F = get_factors(model, use_mgf=False)  # (N, L) - exp(μ)
+    if F is None:
+        if coordinates is not None:
+            F = get_factors(model, use_mgf=False, coordinates=coordinates, groups=gp_groups)
+        else:
+            F = get_factors(model, use_mgf=False)  # (N, L) - exp(μ)
     L = F.shape[1]
 
     # Get global loadings for fallback
@@ -413,20 +477,23 @@ def _compute_group_loadings(
 
 
 def _normalize_loadings(loadings: np.ndarray) -> np.ndarray:
-    """Normalize loadings per factor to sum to 1 (like softmax over genes).
+    """Normalize loadings per gene across factors (row normalization).
 
-    This converts loadings to relative proportions, allowing comparison
-    between global and group-specific loadings that have different scales.
+    For each gene d, divides its loading vector by the sum across all factors:
+        loadings_norm[d, l] = loadings[d, l] / Σ_{l'} loadings[d, l']
+
+    This captures each gene's *relative allocation* across factors, making
+    enrichment comparisons (Wc_norm / W_norm) scale-invariant per gene.
 
     Args:
         loadings: (D, L) loadings matrix
 
     Returns:
-        Normalized loadings where each column sums to 1
+        Normalized loadings where each row (gene) sums to 1
     """
     eps = 1e-10
     loadings_pos = np.maximum(loadings, eps)
-    return loadings_pos / loadings_pos.sum(axis=0, keepdims=True)
+    return loadings_pos / loadings_pos.sum(axis=1, keepdims=True)
 
 
 def _compute_gene_enrichment(
@@ -438,11 +505,14 @@ def _compute_gene_enrichment(
     """Compute relative gene enrichment per factor by cell-type.
 
     For each factor and group, computes relative enrichment by:
-    1. Normalizing loadings per factor (so they sum to 1 across genes)
-    2. Computing log-fold change: log2(group_normalized / global_normalized)
+    1. Normalizing loadings per gene across factors (each gene's row sums to 1):
+           Wc_norm[d, l] = Wc[d, l] / Σ_{l'} Wc[d, l']
+           W_norm[d, l]  = W[d, l]  / Σ_{l'} W[d, l']
+    2. Computing log-fold change: log2(Wc_norm / W_norm)
 
-    This normalization is critical because group-specific loadings are fit
-    independently and have different scales than global loadings.
+    Row normalization makes each gene scale-invariant: we compare how a gene
+    *allocates* its loading across factors in group c vs globally, ignoring
+    the overall magnitude. This is robust to W being sparser than Wc.
 
     Interpretation:
     - Positive LFC → gene has higher relative weight in this cell type
@@ -511,6 +581,48 @@ def _compute_gene_enrichment(
     return results
 
 
+def _get_groupwise_factors_batched(
+    model, coords: np.ndarray, n_groups: int,
+    sort_order: np.ndarray, batch_size: int = 10000,
+) -> dict:
+    """Compute conditional posterior factors for MGGP models.
+
+    For each group g in {0, ..., n_groups-1}, runs the GP forward pass with
+    all cells forced to group g (groupsX_g = full(g)), giving the posterior
+    factor map under the kernel conditioned on that cell type.
+
+    Args:
+        model:      Fitted PNMF model with MGGP prior
+        coords:     (N, 2) spatial coordinates
+        n_groups:   Number of groups G
+        sort_order: Moran's I sort indices (applied to factor columns)
+        batch_size: Batch size for GP forward pass
+
+    Returns:
+        dict {g: (N, L) float32 array} — exp-space posterior means, Moran's I sorted
+    """
+    from PNMF.transforms import _get_spatial_qF
+
+    N = coords.shape[0]
+    result = {}
+
+    for g in range(n_groups):
+        print(f"  Group {g + 1}/{n_groups}...", end="\r", flush=True)
+        all_means = []
+        for start in range(0, N, batch_size):
+            end = min(start + batch_size, N)
+            coords_b = coords[start:end]
+            groups_b = np.full(end - start, g, dtype=np.int64)
+            qF = _get_spatial_qF(model, coordinates=coords_b, groups=groups_b)
+            all_means.append(torch.exp(qF.mean.detach().cpu()).T)  # (chunk, L)
+        factors_g = torch.cat(all_means, dim=0).numpy()  # (N, L)
+        factors_g = factors_g[:, sort_order]             # apply Moran's I sort
+        result[g] = factors_g.astype(np.float32)
+
+    print()  # newline after \r progress
+    return result
+
+
 def _compute_moran_i(factors: np.ndarray, coords: np.ndarray) -> tuple:
     """Compute Moran's I for each factor using squidpy.
 
@@ -538,7 +650,7 @@ def _compute_moran_i(factors: np.ndarray, coords: np.ndarray) -> tuple:
         return idx, df["I"].to_numpy()
 
 
-def run(config_path: str):
+def run(config_path: str, probabilistic: bool = False):
     """Analyze a trained PNMF model.
 
     Output files (outputs/{dataset}/{model}/):
@@ -562,7 +674,9 @@ def run(config_path: str):
 
     # Load trained model
     print(f"Loading trained model from: {model_dir}/")
-    model = _load_model(model_dir)
+    if probabilistic:
+        print("[--probabilistic] Overriding KNN strategy to 'probabilistic' for this analyze run")
+    model = _load_model(model_dir, neighbors_override="probabilistic" if probabilistic else None)
     _print_model_summary(model)
 
     # Extract factors (for spatial models, pass coordinates and optionally groups)
@@ -572,14 +686,12 @@ def run(config_path: str):
     coords = data.X.numpy()
     groups = data.groups.numpy() if (data.groups is not None and use_groups) else None
 
+    # analyze_batch_size: chunk N to avoid OOM on large datasets (SVGP/LCGP)
+    analyze_batch_size = config.training.get("analyze_batch_size", 10000)
+
     if spatial:
-        # For spatial models, call GP forward pass ONCE to get both factors and scales
-        from PNMF.transforms import _get_spatial_qF
-        qF = _get_spatial_qF(model, coordinates=coords, groups=groups)
-        # Extract mean (factors) and scale (uncertainty) from qF distribution
-        # qF.mean and qF.scale are shape (L, N), transpose to (N, L)
-        factors = torch.exp(qF.mean.detach().cpu()).T.numpy()  # exp-space factors
-        scales = qF.scale.detach().cpu().T.numpy()  # standard deviation
+        # Batched GP forward pass — avoids OOM for large N
+        factors, scales = _get_factors_batched(model, coords, groups, analyze_batch_size)
     else:
         factors = get_factors(model, use_mgf=False)  # (N, L) - exp(μ)
         scales = factor_uncertainty(model, return_variance=False)  # (N, L)
@@ -590,20 +702,14 @@ def run(config_path: str):
     moran_idx, moran_values = _compute_moran_i(factors, coords)
     print(f"  Top 3 Moran's I: {moran_values[:3]}")
 
-    # Compute reconstruction error
+    # Compute reconstruction error (use pre-computed factors to avoid second GP pass)
     print("Computing reconstruction error...")
-    if spatial:
-        recon_error = _compute_reconstruction_error(model, data.Y.numpy(), coordinates=coords, groups=groups)
-    else:
-        recon_error = _compute_reconstruction_error(model, data.Y.numpy())
+    recon_error = _compute_reconstruction_error(model, data.Y.numpy(), F=factors)
     print(f"  Reconstruction error: {recon_error:.4f}")
 
-    # Compute Poisson deviance
+    # Compute Poisson deviance (use pre-computed factors to avoid third GP pass)
     print("Computing Poisson deviance...")
-    if spatial:
-        poisson_dev = _compute_poisson_deviance(model, data.Y.numpy(), coordinates=coords, groups=groups)
-    else:
-        poisson_dev = _compute_poisson_deviance(model, data.Y.numpy())
+    poisson_dev = _compute_poisson_deviance(model, data.Y.numpy(), F=factors)
     print(f"  Poisson deviance (mean): {poisson_dev['mean']:.4f}")
 
     # Compute group-specific loadings whenever data has groups
@@ -611,17 +717,11 @@ def run(config_path: str):
     group_loadings_result = None
     if data.groups is not None and data.n_groups > 1:
         print(f"\nComputing group-specific loadings for {data.n_groups} groups...")
-        # gp_groups: only pass to GP forward pass for multigroup models
-        gp_groups = data.groups.numpy() if use_groups else None
-        if spatial:
-            group_loadings_result = _compute_group_loadings(
-                model, data.Y.numpy(), data.groups.numpy(),
-                coordinates=coords, gp_groups=gp_groups, verbose=True,
-            )
-        else:
-            group_loadings_result = _compute_group_loadings(
-                model, data.Y.numpy(), data.groups.numpy(), verbose=True,
-            )
+        # Pass pre-computed factors to avoid a fourth GP forward pass
+        group_loadings_result = _compute_group_loadings(
+            model, data.Y.numpy(), data.groups.numpy(),
+            F=factors, verbose=True,
+        )
         print(f"  Group reconstruction errors:")
         for g, err in group_loadings_result["reconstruction_error"].items():
             group_name = data.group_names[g] if data.group_names else f"Group {g}"
@@ -637,6 +737,16 @@ def run(config_path: str):
         for g in group_loadings_result["loadings"]:
             group_loadings_result["loadings"][g] = group_loadings_result["loadings"][g][:, sort_order]
     print(f"  Factor order (by Moran's I): {sort_order.tolist()}")
+
+    # Reorder video frames if they exist (same sort_order as factors, avoids re-running Moran's I)
+    video_frames_path = model_dir / "video_frames.npy"
+    if video_frames_path.exists():
+        print("  Reordering video frames to match factor order...")
+        video_frames = np.load(video_frames_path)          # (n_frames, N, L)
+        video_frames = video_frames[:, :, sort_order]
+        np.save(video_frames_path, video_frames)
+        np.save(model_dir / "video_moran_values.npy", moran_values)
+        print(f"  Saved reordered video frames and Moran's I cache.")
 
     # Save factors
     np.save(model_dir / "factors.npy", factors)
@@ -660,8 +770,8 @@ def run(config_path: str):
         is_lcgp = not hasattr(gp.Lu, '_raw')
 
         if is_lcgp:
-            # LCGP: Save Lu as raw parameter (L, M, K)
-            Lu_raw = gp.Lu.data[sort_order, :, :]  # (L, M, K) reordered by Moran's I
+            # LCGP: Save Lu as raw parameter (L, M, R)
+            Lu_raw = gp.Lu.data[sort_order, :, :]  # (L, M, R) reordered by Moran's I
             np.save(model_dir / "Lu.npy", Lu_raw.detach().cpu().numpy())
             msg = f"  Saved LCGP Lu data: Lu {tuple(Lu_raw.shape)}, Z {tuple(Z.shape)}"
         else:
@@ -676,6 +786,18 @@ def run(config_path: str):
             np.save(model_dir / "groupsZ.npy", groupsZ.detach().cpu().numpy())
             msg += f", groupsZ {tuple(groupsZ.shape)}"
         print(msg)
+
+    # Compute and save groupwise conditional posterior (MGGP models only)
+    if config.groups and spatial:
+        print(f"\nComputing groupwise conditional posterior ({data.n_groups} groups)...")
+        groupwise_dir = model_dir / "groupwise_factors"
+        groupwise_dir.mkdir(exist_ok=True)
+        groupwise = _get_groupwise_factors_batched(
+            model, coords, data.n_groups, sort_order, analyze_batch_size
+        )
+        for g, factors_g in groupwise.items():
+            np.save(groupwise_dir / f"group_{g}.npy", factors_g)
+        print(f"  Saved {data.n_groups} groupwise factor arrays to {groupwise_dir}/")
 
     # Save group-specific loadings and compute gene enrichment
     gene_enrichment = None
@@ -697,6 +819,45 @@ def run(config_path: str):
         with open(model_dir / "gene_enrichment.json", "w") as f:
             json.dump(gene_enrichment, f, indent=2)
         print(f"  Saved gene enrichment for {gene_enrichment['n_factors']} factors x {gene_enrichment['n_groups']} groups")
+
+        # Compute PCA gene order per factor: for each factor, stack LFC across groups (D, G),
+        # run PCA, order genes by PC1. Result shape: (L, D).
+        print("\nComputing PCA gene ordering (per factor)...")
+        from sklearn.decomposition import PCA
+        D, L = model.components_.T.shape
+        eps = 1e-10
+        # Normalize global loadings per gene across factors
+        global_raw = np.maximum(model.components_.T, eps)  # (D, L)
+        global_norm = global_raw / global_raw.sum(axis=1, keepdims=True)
+        # Precompute per-group normalized LFC arrays
+        sorted_groups = sorted(group_loadings_result["loadings"])
+        lfc_by_group = []
+        for g in sorted_groups:
+            grp_raw = np.maximum(group_loadings_result["loadings"][g], eps)  # (D, L)
+            grp_norm = grp_raw / grp_raw.sum(axis=1, keepdims=True)
+            lfc_by_group.append(np.log2(grp_norm / global_norm))  # (D, L)
+        pca = PCA(n_components=1)
+        pca_gene_order = np.zeros((L, D), dtype=int)
+        for l in range(L):
+            # Stack across groups for this factor: (D, G)
+            factor_lfc = np.stack([lfc[:, l] for lfc in lfc_by_group], axis=1)
+            pca.fit(factor_lfc)
+            pc1_scores = pca.transform(factor_lfc)[:, 0]  # (D,)
+            pca_gene_order[l] = np.argsort(pc1_scores)[::-1]
+        np.save(model_dir / "pca_gene_order.npy", pca_gene_order)
+        print(f"  Saved pca_gene_order.npy ({L} factors x {D} genes, per-factor PC1 ordering)")
+
+        # Compute PCA gene order per cell type: for each group, use LFC (D, L),
+        # run PCA, order genes by PC1. Result shape: (G, D).
+        G = len(sorted_groups)
+        pca_gene_order_by_celltype = np.zeros((G, D), dtype=int)
+        for i, lfc in enumerate(lfc_by_group):
+            # lfc is (D, L) — genes as samples, factors as features
+            pca.fit(lfc)
+            pc1_scores = pca.transform(lfc)[:, 0]  # (D,)
+            pca_gene_order_by_celltype[i] = np.argsort(pc1_scores)[::-1]
+        np.save(model_dir / "pca_gene_order_by_celltype.npy", pca_gene_order_by_celltype)
+        print(f"  Saved pca_gene_order_by_celltype.npy ({G} cell types x {D} genes, per-celltype PC1 ordering)")
 
     # Save Moran's I results
     moran_df = pd.DataFrame({

@@ -12,6 +12,7 @@ preprocessing:
   min_counts: 100
   min_cells: 10
 
+  min_group_fraction: 0.01  # drop groups with <1% of total cells
 model:
   # Common params (used by all models)
   n_components: 10
@@ -38,7 +39,7 @@ model:
   inducing_allocation: derived
 
 training:
-  max_iter: 200
+  max_iter: 10
   learning_rate: 2e-3
   optimizer: Adam
   tol: 1e-4

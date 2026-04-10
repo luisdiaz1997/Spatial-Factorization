@@ -3,10 +3,20 @@
 from .base import SpatialData, DatasetLoader, load_preprocessed
 from .slideseq import SlideseqLoader
 from .tenxvisium import TenxVisiumLoader
+from .sdmbench import SDMBenchLoader
+from .liver import LiverLoader
+from .merfish import MerfishLoader
+from .colon import ColonLoader
+from .osmfish import OsmfishLoader
 
 LOADERS = {
     "slideseq": SlideseqLoader,
     "tenxvisium": TenxVisiumLoader,
+    "sdmbench": SDMBenchLoader,
+    "liver": LiverLoader,
+    "merfish": MerfishLoader,
+    "colon": ColonLoader,
+    "osmfish": OsmfishLoader,
 }
 
 
@@ -16,9 +26,10 @@ def load_dataset(dataset: str, preprocessing: dict = None) -> SpatialData:
     Parameters
     ----------
     dataset : str
-        Dataset name (e.g., 'slideseq', 'tenxvisium').
+        Dataset name. Available: slideseq, tenxvisium, sdmbench, liver,
+        merfish, colon, osmfish.
     preprocessing : dict, optional
-        Preprocessing parameters (spatial_scale, filter_mt, min_counts, min_cells).
+        Preprocessing parameters (dataset-specific).
 
     Returns
     -------
@@ -38,6 +49,11 @@ __all__ = [
     "DatasetLoader",
     "SlideseqLoader",
     "TenxVisiumLoader",
+    "SDMBenchLoader",
+    "LiverLoader",
+    "MerfishLoader",
+    "ColonLoader",
+    "OsmfishLoader",
     "load_dataset",
     "load_preprocessed",
     "LOADERS",
