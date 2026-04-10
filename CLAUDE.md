@@ -420,9 +420,21 @@ spatial_factorization run all -c configs/slideseq/general.yaml --force
 
 # Dry run (show plan without executing)
 spatial_factorization run all -c configs/slideseq/general.yaml --dry-run
+
+# Resume ALL mggp_lcgp models across all datasets using probabilistic KNN
+spatial_factorization run all -c configs/ --config-name mggp_lcgp.yaml --resume --probabilistic
+
+# Grab every *.yaml in a directory as a per-model config (skip general.yaml)
+spatial_factorization run all --skip-general -c configs/slideseq/
 ```
 
-**`--config-name`** (default: `general.yaml`): when `config` is a directory, this is the filename to search for recursively. Use `--config-name general_test.yaml` to run quick tests across all datasets.
+**`--config-name`** (default: `general.yaml`): when `config` is a directory, this is the filename to search for recursively. Use `--config-name general_test.yaml` to run quick tests across all datasets. If the matched file is a **general** config it is expanded into per-model configs via `generate_configs`; if it is a **per-model** config (e.g. `mggp_lcgp.yaml`) it is used as-is. Behavior is per-file, so a mixed tree works.
+
+**`--skip-general`**: when `config` is a directory, ignore all general configs and treat every non-general `*.yaml` in the tree as a per-model config. Use when you have named variants (e.g. `configs/slideseq/video/*.yaml`) and want all of them launched without regenerating from `general.yaml`.
+
+**Fallback:** if no files match `--config-name` in the tree, the runner globs every `*.yaml` recursively and treats each as a per-model config.
+
+**`--probabilistic`**: overrides the saved/config KNN strategy to `probabilistic` for LCGP models. Affects both `train` (rebuilds `knn_idz` via kernel-weighted sampling, mutates config so the saved checkpoint records `neighbors=probabilistic`) and `analyze` (loads the model with probabilistic KNN; outputs overwrite in place). No-op for non-LCGP models. Works with `run all`, `run train analyze figures`, and the standalone `train`/`analyze` commands. Combine with `--resume` to continue training from a deterministic-KNN checkpoint using probabilistic neighbors.
 
 **Multi-dataset behavior:**
 - Preprocessing runs once per unique `output_dir` (not once globally)

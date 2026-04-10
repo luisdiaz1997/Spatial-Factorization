@@ -37,10 +37,12 @@ def preprocess(config):
 @click.option("--config", "-c", required=True, type=click.Path(exists=True), help="Path to config YAML")
 @click.option("--resume", is_flag=True, default=False, help="Resume training from saved checkpoint, appending to ELBO history")
 @click.option("--video", is_flag=True, default=False, help="Capture factor snapshots during training and save as MP4.")
-def train(config, resume, video):
+@click.option("--probabilistic", is_flag=True, default=False,
+              help="Use probabilistic KNN strategy for LCGP training (overrides saved/config neighbors)")
+def train(config, resume, video, probabilistic):
     """Train a PNMF model."""
     from .commands import train as train_cmd
-    train_cmd.run(config, resume=resume, video=video)
+    train_cmd.run(config, resume=resume, video=video, probabilistic=probabilistic)
 
 
 @cli.command()
@@ -136,7 +138,17 @@ def run_pipeline(stages, config, force, dry_run, resume, video, gpu_only, config
     CONFIG BEHAVIOR (with 'all' stage):
         - Per-model YAML (e.g., svgp.yaml):     Runs all stages for that single model
         - General YAML (e.g., general.yaml):     Generates per-model configs, then runs all in parallel
-        - Directory:                             Recursively finds all general.yaml files, generates configs, runs all in parallel
+        - Directory:                             Recursively finds files matching --config-name.
+                                                  General files are expanded; per-model files are used as-is.
+                                                  If no match, falls back to every *.yaml in the tree.
+        - Directory + --skip-general:           Every non-general *.yaml in the tree is used as a per-model config.
+
+    \b
+    FLAGS:
+        --config-name NAME      Filename to rglob when config is a dir (default: general.yaml)
+        --skip-general          Treat all non-general yamls in the dir as per-model configs
+        --probabilistic         Override LCGP KNN strategy to probabilistic for train and analyze
+        --resume                Resume from checkpoint if present; train from scratch otherwise
 
     \b
     EXAMPLES:
@@ -202,7 +214,7 @@ def run_pipeline(stages, config, force, dry_run, resume, video, gpu_only, config
         click.echo(f"{'='*60}\n")
         if stage == "train":
             from .commands import train as train_cmd
-            train_cmd.run(config, resume=resume, video=video)
+            train_cmd.run(config, resume=resume, video=video, probabilistic=probabilistic)
         elif stage == "figures":
             from .commands import figures as figures_cmd
             figures_cmd.run(config, no_heatmap=no_heatmap)

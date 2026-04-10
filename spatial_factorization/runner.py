@@ -334,16 +334,26 @@ class JobRunner:
                     print(f"  {p.name}")
                 return per_model
 
-            general_configs = list(self.config_path.rglob(self.config_name))
+            matched = list(self.config_path.rglob(self.config_name))
 
-            if general_configs:
-                print(f"Found {len(general_configs)} general config(s)")
+            if matched:
+                # Split into general (needs expansion) vs per-model (use as-is)
+                general_configs = [p for p in matched if Config.is_general_config(p)]
+                per_model_configs = [p for p in matched if not Config.is_general_config(p)]
+
                 config_paths = []
-                for general_path in general_configs:
-                    from .generate import generate_configs
-                    generated = generate_configs(general_path)
-                    config_paths.extend(generated.values())
-                    print(f"  {general_path.parent.name}: {len(generated)} models")
+                if general_configs:
+                    print(f"Found {len(general_configs)} general config(s)")
+                    for general_path in general_configs:
+                        from .generate import generate_configs
+                        generated = generate_configs(general_path)
+                        config_paths.extend(generated.values())
+                        print(f"  {general_path.parent.name}: {len(generated)} models")
+                if per_model_configs:
+                    print(f"Found {len(per_model_configs)} per-model config(s) matching {self.config_name}")
+                    for p in per_model_configs:
+                        print(f"  {p.parent.name}/{p.name}")
+                    config_paths.extend(per_model_configs)
                 return config_paths
 
             # No general configs found — treat every yaml in the directory as a
@@ -678,7 +688,7 @@ class JobRunner:
             cmd.append("--video")
         if "figures" in stages and self.no_heatmap:
             cmd.append("--no-heatmap")
-        if "analyze" in stages and self.probabilistic:
+        if self.probabilistic and (("analyze" in stages) or ("train" in stages)):
             cmd.append("--probabilistic")
         cmd += ["-c", str(job.config_path)]
 
@@ -724,7 +734,7 @@ class JobRunner:
         ]
         if stage == "figures" and self.no_heatmap:
             cmd.append("--no-heatmap")
-        if stage == "analyze" and self.probabilistic:
+        if stage in ("analyze", "train") and self.probabilistic:
             cmd.append("--probabilistic")
 
         env = dict(os.environ)

@@ -211,7 +211,7 @@ def _make_video_callback(config: Config, data, video_interval: int, frames: list
 
 
 
-def run(config_path: str, resume: bool = False, video: bool = False):
+def run(config_path: str, resume: bool = False, video: bool = False, probabilistic: bool = False):
     """Train a PNMF model from config.
 
     Output files (outputs/{dataset}/{model}/):
@@ -222,6 +222,16 @@ def run(config_path: str, resume: bool = False, video: bool = False):
         config.yaml        - Copy of config used
     """
     config = Config.from_yaml(config_path)
+
+    # --probabilistic overrides the KNN strategy for LCGP training. Mutate the
+    # config so to_pnmf_kwargs passes neighbors=probabilistic to PNMF and the
+    # saved hyperparameters reflect the strategy actually used.
+    if probabilistic:
+        if config.local:
+            config.model["neighbors"] = "probabilistic"
+            print("[--probabilistic] Overriding KNN strategy to 'probabilistic' for training")
+        else:
+            print("[--probabilistic] Ignored: only affects LCGP (local=True) training")
 
     # Set random seeds
     torch.manual_seed(config.seed)
@@ -255,7 +265,7 @@ def run(config_path: str, resume: bool = False, video: bool = False):
     if resume:
         print(f"Resuming training from: {model_dir}/")
         from .analyze import _load_model
-        loaded_model = _load_model(model_dir)
+        loaded_model = _load_model(model_dir, neighbors_override="probabilistic" if probabilistic else None)
 
         # Track previous iteration count for cumulative metadata
         training_json = model_dir / "training.json"
