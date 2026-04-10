@@ -35,8 +35,9 @@ from knn_strategies import default_query_idx, kernel_weights
 
 OUT_DIR = os.path.join(PANEL2_DIR, "density")
 
-QUERY_COLOR = "#E03030"
-CMAP = "YlOrRd"
+QUERY_COLOR = "#111111"
+CMAP = "bwr"
+N_LEVELS = 10
 
 KERNEL_LABELS = {
     "rbf": "RBF",
@@ -66,6 +67,8 @@ def main():
     parser.add_argument("--lengthscale", type=float, default=None)
     parser.add_argument("--query-idx", type=int, default=None)
     parser.add_argument("--kernel", choices=["rbf", "matern32"], default="rbf")
+    parser.add_argument("--levels", type=int, default=N_LEVELS,
+                        help="Number of quantization levels for quasi-contour")
     parser.add_argument("--log", action="store_true", help="Log color scale")
     parser.add_argument("--log-vmin", type=float, default=1e-3)
     parser.add_argument("--out", type=str, default=None)
@@ -105,10 +108,11 @@ def main():
     print(f"Query idx:   {query_idx}  coord: {query_coord}")
 
     if args.log:
-        norm = mcolors.LogNorm(vmin=args.log_vmin, vmax=1.0)
+        boundaries = np.geomspace(args.log_vmin, 1.0, args.levels + 1)
     else:
-        norm = mcolors.Normalize(vmin=0.0, vmax=1.0)
-    cmap = plt.get_cmap(CMAP)
+        boundaries = np.linspace(0.0, 1.0, args.levels + 1)
+    cmap = plt.get_cmap(CMAP, args.levels)
+    norm = mcolors.BoundaryNorm(boundaries, ncolors=args.levels)
     s = _auto_point_size(N)
     w = kernel_weights(X, query_coord, lengthscale, args.kernel)
 
@@ -118,11 +122,9 @@ def main():
     mappable = cm.ScalarMappable(cmap=cmap, norm=norm)
     cb = fig.colorbar(mappable, ax=ax, fraction=0.046, pad=0.04)
     cb.set_label("Kernel weight", fontsize=10)
+    cb.set_ticks(boundaries)
     if args.log:
-        cb.ax.yaxis.set_major_locator(mticker.LogLocator())
         cb.ax.yaxis.set_major_formatter(mticker.LogFormatterMathtext())
-    else:
-        cb.set_ticks([0.0, 0.25, 0.5, 0.75, 1.0])
 
     fig.tight_layout()
 

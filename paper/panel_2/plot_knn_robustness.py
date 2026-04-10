@@ -80,12 +80,12 @@ def plot_robustness(
     strategy_labels = ["Baseline\n(K-nearest)", KERNEL_LABELS[kernel]]
     n_rows = len(strategy_labels)
     n_cols = len(N_values)
-    fig = plt.figure(figsize=(4.5 * n_cols + 1.2, 4.5 * n_rows))
+    fig = plt.figure(figsize=(4.5 * n_cols + 1.2, 4.5 * n_rows + 1.0))
     gs = gridspec.GridSpec(
         n_rows, n_cols,
         figure=fig,
         hspace=0.08, wspace=0.08,
-        left=0.12, right=0.97, top=0.95, bottom=0.03,
+        left=0.03, right=0.97, top=0.92, bottom=0.03,
     )
 
     for col, N in enumerate(N_values):
@@ -130,12 +130,7 @@ def plot_robustness(
 
             # Column title on first row
             if row == 0:
-                ax.set_title(f"N = {N:,}", fontsize=11, pad=6)
-
-            # Row label on first column
-            if col == 0:
-                ax.set_ylabel(label, fontsize=10, labelpad=8, rotation=90,
-                              va="center", ha="center")
+                ax.set_title(f"N = {N:,}", fontsize=28, pad=12)
 
     return fig
 

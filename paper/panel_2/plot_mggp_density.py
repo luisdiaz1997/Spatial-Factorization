@@ -36,8 +36,9 @@ from knn_strategies import kernel_weights_mggp, default_query_idx, build_mggp_ke
 
 OUT_DIR = os.path.join(PANEL2_DIR, "density", "mggp")
 
-QUERY_COLOR = "#E03030"
-CMAP = "YlOrRd"
+QUERY_COLOR = "#111111"
+CMAP = "bwr"
+N_LEVELS = 10
 
 
 def draw_panel(ax, X, weights, query_coord, s, norm, cmap, title):
@@ -64,6 +65,8 @@ def main():
     parser.add_argument("--group-diff-param", type=float, default=None)
     parser.add_argument("--query-idx", type=int, default=None,
                         help="Fixed query cell index (default: tissue centroid)")
+    parser.add_argument("--levels", type=int, default=N_LEVELS,
+                        help="Number of quantization levels for quasi-contour")
     parser.add_argument("--log", action="store_true", help="Log color scale")
     parser.add_argument("--log-vmin", type=float, default=1e-3)
     parser.add_argument("--out", type=str, default=None)
@@ -105,10 +108,11 @@ def main():
     print(f"Query idx: {query_idx}  coord: {query_coord}")
 
     if args.log:
-        norm = mcolors.LogNorm(vmin=args.log_vmin, vmax=1.0)
+        boundaries = np.geomspace(args.log_vmin, 1.0, args.levels + 1)
     else:
-        norm = mcolors.Normalize(vmin=0.0, vmax=1.0)
-    cmap = plt.get_cmap(CMAP)
+        boundaries = np.linspace(0.0, 1.0, args.levels + 1)
+    cmap = plt.get_cmap(CMAP, args.levels)
+    norm = mcolors.BoundaryNorm(boundaries, ncolors=args.levels)
     s = _auto_point_size(N)
 
     n_cols, n_rows = 5, 3
@@ -131,11 +135,9 @@ def main():
     mappable = cm.ScalarMappable(cmap=cmap, norm=norm)
     cb = fig.colorbar(mappable, ax=axes_flat[:n_groups], fraction=0.02, pad=0.02)
     cb.set_label("Kernel weight", fontsize=11)
+    cb.set_ticks(boundaries)
     if args.log:
-        cb.ax.yaxis.set_major_locator(mticker.LogLocator())
         cb.ax.yaxis.set_major_formatter(mticker.LogFormatterMathtext())
-    else:
-        cb.set_ticks([0.0, 0.25, 0.5, 0.75, 1.0])
 
     dataset_tag = os.path.basename(os.path.normpath(output_dir))
     scale_tag = "_log" if args.log else ""
