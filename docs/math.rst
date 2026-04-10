@@ -167,23 +167,42 @@ MGGP_SVGP Prior
 ~~~~~~~~~~~~~~~
 
 Extends SVGP with a **multi-group kernel** that models cross-group correlations.
-Given group labels :math:`c_i \in \{0, \ldots, G-1\}`:
+Given group labels :math:`c_i \in \{0, \ldots, G-1\}`, each group is embedded into
+Euclidean space via classical MDS applied to a pairwise distance matrix
+(default: all groups equidistant, distance 1). The embeddings :math:`\mathbf{e}(c)`
+are fixed (``requires_grad=False``); only the scalar ``group_diff_param`` :math:`\alpha`
+is learned.
+
+For the Matérn-3/2 MGGP kernel with spatial dimension :math:`p`:
 
 .. math::
 
-   k_{\text{MGGP}}\!\left((x, c),\, (x', c')\right) =
-   k_{\text{base}}(x, x') \cdot \rho(c, c')
+   d^2_g &= \|\mathbf{e}(c) - \mathbf{e}(c')\|^2 \\[4pt]
+   \nu   &= \frac{1}{|\alpha|\, d^2_g + 1} \\[4pt]
+   \tilde{r} &= \frac{\sqrt{3}\, r}{\ell}\, \nu^{1/2} \\[4pt]
+   k_{\text{MGGP}}\!\left((x,c),\,(x',c')\right)
+         &= \sigma^2\,(1 + \tilde{r})\,e^{-\tilde{r}}\;\nu^{(3+p)/2}
 
-where:
+where :math:`r = \|x - x'\|_2` is the Euclidean spatial distance.
+
+**Interpretation.**
+:math:`\nu \in (0, 1]` is an attenuation factor:
+
+- **Same group** (:math:`c = c'`): :math:`d^2_g = 0 \Rightarrow \nu = 1` — reduces to
+  the standard Matérn-3/2 kernel.
+- **Different groups** (:math:`\nu < 1`): the effective spatial lengthscale shrinks
+  (cross-group covariance decays faster with distance) *and* the overall amplitude is
+  reduced by :math:`\nu^{(3+p)/2}`.
+
+When :math:`\alpha \to 0`, all groups share a single GP.
+When :math:`\alpha \to \infty`, cross-group covariance vanishes (fully independent GPs).
+
+For the **RBF** variant (``kernel: RBF``):
 
 .. math::
 
-   \rho(c, c') = \begin{cases}
-     1 & \text{if } c = c' \\
-     \exp(-\delta) & \text{if } c \neq c'
-   \end{cases}
-
-and :math:`\delta` is ``group_diff_param`` (default 1.0; higher = more independent groups).
+   k_{\text{MGGP-RBF}}\!\left((x,c),\,(x',c')\right)
+   = \sigma^2\,\exp\!\left(-\frac{r^2}{2\ell^2}\,\nu\right)\,\nu^{p/2}
 
 Inducing points :math:`\mathbf{Z}` have associated group labels ``groupsZ``.
 Saved: ``Lu.pt`` (:math:`L \times M \times M`), ``groupsZ.npy`` (:math:`M`).
