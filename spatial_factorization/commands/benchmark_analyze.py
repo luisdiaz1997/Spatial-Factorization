@@ -1,0 +1,408 @@
+"""Benchmark trained models using SDMBench metrics (Zhao et al.).
+
+Computes K-means cluster assignments from learned factors, then evaluates
+with ARI, NMI, HOM, COM, CHAOS, PAS, ASW (via SDMBench) plus Moran's I
+mean (read from existing metrics.json).
+
+SDMBench: Zhao F, et al. https://github.com/zhaofangyuan98/SDMBench
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+from typing import List, Optional, Tuple
+
+import anndata
+import numpy as np
+import pandas as pd
+from sklearn.cluster import KMeans
+from sklearn.decomposition import PCA
+
+from ..config import Config
+from ..datasets.base import load_preprocessed
+from ..status import JobStatus, StatusManager
+
+# SDMBench path — imported by path since the package's editable install is broken
+_SDMBENCH_PATH = Path(__file__).resolve().parents[3] / "SDMBench" / "SDMBench" / "SDMBench.py"
+
+MODEL_NAMES = ["pnmf", "svgp", "mggp_svgp", "lcgp", "mggp_lcgp"]
+
+
+def _load_sdmbench():
+    """Import sdmbench class from SDMBench.py by file path."""
+    # Try normal import first (in case it gets fixed)
+    try:
+        from SDMBench import sdmbench
+        return sdmbench
+    except ImportError:
+        pass
+
+    # Fall back to path-based import
+    sdmbench_path = _SDMBENCH_PATH
+    if not sdmbench_path.exists():
+        # Try relative to gitclones
+        alt = Path.home() / "gitclones" / "SDMBench" / "SDMBench" / "SDMBench.py"
+        if alt.exists():
+            sdmbench_path = alt
+        else:
+            raise ImportError(
+                f"SDMBench not found at {_SDMBENCH_PATH} or {alt}. "
+                "Install: pip install -e /path/to/SDMBench/SDMBench/"
+            )
+    spec = importlib.util.spec_from_file_location("SDMBench", str(sdmbench_path))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.sdmbench
+
+
+def _kmeans_on_factors(factors: np.ndarray, n_clusters: int) -> np.ndarray:
+    """K-means on (N, L) exp-space factors after log-transform.
+
+    factors.npy stores exp(F); we log-transform before clustering
+    (consistent with GPzoo generate_annotations.py:343).
+    """
+    log_factors = np.log(factors + 1e-8)
+    return KMeans(n_clusters=n_clusters, random_state=0, n_init=10).fit_predict(log_factors)
+
+
+
+def _load_moran_i_mean(model_dir: Path) -> Optional[float]:
+    """Read moran_i.mean from already-computed metrics.json."""
+    metrics_path = model_dir / "metrics.json"
+    if not metrics_path.exists():
+        return None
+    with open(metrics_path) as f:
+        metrics = json.load(f)
+    return metrics.get("moran_i", {}).get("mean")
+
+
+def _compute_sdmbench_metrics(
+    sdmbench_cls, X: np.ndarray, gt_labels: np.ndarray, pred_labels: np.ndarray
+) -> dict:
+    """Compute SDMBench metrics for one set of predictions.
+
+    Constructs a minimal AnnData with obs['gt'], obs['pred'], obsm['spatial'].
+    """
+    adata = anndata.AnnData(
+        obs=pd.DataFrame({
+            "gt": pd.Categorical(gt_labels),
+            "pred": pd.Categorical(pred_labels),
+        })
+    )
+    adata.obsm["spatial"] = X
+
+    results = {}
+    # Ground-truth-dependent metrics
+    results["ARI"] = sdmbench_cls.compute_ARI(adata, "gt", "pred")
+    results["NMI"] = sdmbench_cls.compute_NMI(adata, "gt", "pred")
+    results["HOM"] = sdmbench_cls.compute_HOM(adata, "gt", "pred")
+    results["COM"] = sdmbench_cls.compute_COM(adata, "gt", "pred")
+    # Spatial continuity metrics
+    results["CHAOS"] = sdmbench_cls.compute_CHAOS(adata, "pred")
+    results["PAS"] = sdmbench_cls.compute_PAS(adata, "pred", spatial_key="spatial")
+    results["ASW"] = sdmbench_cls.compute_ASW(adata, "pred", spatial_key="spatial")
+    return results
+
+
+def _benchmark_one_model(
+    model_name: str,
+    model_dir: Path,
+    benchmark_dir: Path,
+    sdmbench_cls,
+    X: np.ndarray,
+    gt_labels: np.ndarray,
+    n_clusters: int,
+    status_manager: StatusManager,
+    job_prefix: str,
+) -> Optional[dict]:
+    """Benchmark a single model. Returns results dict or None on failure."""
+    job_name = f"{job_prefix}_{model_name}"
+    status_manager.update_job(job_name, status="running", start_time=time.time())
+
+    try:
+        factors = np.load(model_dir / "factors.npy")
+        pred = _kmeans_on_factors(factors, n_clusters)
+        np.save(benchmark_dir / "annotations" / f"{model_name}.npy", pred)
+
+        moran_i_mean = _load_moran_i_mean(model_dir)
+        metrics = _compute_sdmbench_metrics(sdmbench_cls, X, gt_labels, pred)
+        result = {"model": model_name, "moran_i_mean": moran_i_mean, **metrics}
+
+        # Save per-model JSON
+        with open(benchmark_dir / f"{model_name}_results.json", "w") as f:
+            json.dump(result, f, indent=2)
+
+        status_manager.update_job(job_name, status="completed", end_time=time.time())
+        return result
+    except Exception as e:
+        status_manager.update_job(job_name, status="failed", end_time=time.time())
+        print(f"  [{model_name}] Error: {e}")
+        return None
+
+
+def _compute_moran_i_mean(factors: np.ndarray, coords: np.ndarray) -> float:
+    """Compute mean Moran's I across factors. Reuses analyze module."""
+    from .analyze import _compute_moran_i
+    _, moran_values = _compute_moran_i(factors, coords)
+    return float(np.mean(moran_values))
+
+
+def _benchmark_pca_baseline(
+    Y: np.ndarray,
+    n_components: int,
+    benchmark_dir: Path,
+    sdmbench_cls,
+    X: np.ndarray,
+    gt_labels: np.ndarray,
+    n_clusters: int,
+    status_manager: StatusManager,
+    job_prefix: str,
+) -> Optional[dict]:
+    """Compute PCA baseline and benchmark it."""
+    job_name = f"{job_prefix}_pca_baseline"
+    status_manager.update_job(job_name, status="running", start_time=time.time())
+
+    try:
+        pca = PCA(n_components=n_components, random_state=0)
+        pca_factors = pca.fit_transform(Y)
+        pred = KMeans(n_clusters=n_clusters, random_state=0, n_init=10).fit_predict(pca_factors)
+        np.save(benchmark_dir / "annotations" / "pca_baseline.npy", pred)
+
+        # Compute Moran's I for PCA factors
+        moran_i_mean = _compute_moran_i_mean(pca_factors, X)
+
+        metrics = _compute_sdmbench_metrics(sdmbench_cls, X, gt_labels, pred)
+        result = {"model": "pca_baseline", "moran_i_mean": moran_i_mean, **metrics}
+
+        with open(benchmark_dir / "pca_baseline_results.json", "w") as f:
+            json.dump(result, f, indent=2)
+
+        status_manager.update_job(job_name, status="completed", end_time=time.time())
+        return result
+    except Exception as e:
+        status_manager.update_job(job_name, status="failed", end_time=time.time())
+        print(f"  [pca_baseline] Error: {e}")
+        return None
+
+
+def run(config_path: str, model_filter: tuple = (), include_baselines: bool = True):
+    """Benchmark all trained models for a single dataset.
+
+    Args:
+        config_path: Path to a per-model or general YAML.
+        model_filter: If non-empty, only benchmark these model names.
+        include_baselines: Whether to compute PCA baseline.
+    """
+    config = Config.from_yaml(config_path)
+    output_dir = Path(config.output_dir)
+    benchmark_dir = output_dir / "benchmark"
+    benchmark_dir.mkdir(parents=True, exist_ok=True)
+    (benchmark_dir / "annotations").mkdir(exist_ok=True)
+
+    # Load preprocessed data
+    data = load_preprocessed(output_dir)
+    X = data.X.numpy()
+    gt_labels = data.groups.numpy()
+    n_clusters = data.n_groups
+    n_components = config.model.get("n_components", 10)
+    group_names = data.group_names or []
+
+    print(f"  N={X.shape[0]}, G={n_clusters} groups ({', '.join(group_names[:5])}{'...' if len(group_names) > 5 else ''})")
+    print(f"  n_clusters={n_clusters} (inferred from groups)")
+
+    # Collect available models
+    model_dirs = {}
+    for name in MODEL_NAMES:
+        if model_filter and name not in model_filter:
+            continue
+        d = output_dir / name
+        if (d / "factors.npy").exists():
+            model_dirs[name] = d
+
+    if not model_dirs and not include_baselines:
+        print("  No models found to benchmark.")
+        return
+
+    # Load SDMBench
+    sdmbench_cls = _load_sdmbench()
+
+    # Derive job prefix from output_dir
+    out_parts = output_dir.parts
+    job_prefix = "_".join(out_parts[1:]) if len(out_parts) > 1 else out_parts[0] if out_parts else "benchmark"
+
+    # Setup status manager with all jobs
+    status_manager = StatusManager()
+    for name in model_dirs:
+        status_manager.add_job(JobStatus(
+            name=f"{job_prefix}_{name}", model=name, task="benchmark",
+            config_path=Path(config_path), device="cpu", status="pending",
+        ))
+    if include_baselines:
+        status_manager.add_job(JobStatus(
+            name=f"{job_prefix}_pca_baseline", model="pca_baseline", task="benchmark",
+            config_path=Path(config_path), device="cpu", status="pending",
+        ))
+
+    all_results = []
+
+    # Run models + baseline in parallel (3 workers)
+    with status_manager:
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            futures = {}
+
+            for model_name, model_dir in model_dirs.items():
+                fut = executor.submit(
+                    _benchmark_one_model,
+                    model_name, model_dir, benchmark_dir, sdmbench_cls,
+                    X, gt_labels, n_clusters, status_manager, job_prefix,
+                )
+                futures[fut] = model_name
+
+            if include_baselines:
+                Y = data.Y.numpy()
+                fut = executor.submit(
+                    _benchmark_pca_baseline,
+                    Y, n_components, benchmark_dir, sdmbench_cls,
+                    X, gt_labels, n_clusters, status_manager, job_prefix,
+                )
+                futures[fut] = "pca_baseline"
+
+            for fut in as_completed(futures):
+                result = fut.result()
+                if result:
+                    all_results.append(result)
+
+    # Save combined CSV
+    if all_results:
+        df = pd.DataFrame(all_results).set_index("model")
+        # Reorder to canonical order
+        order = [m for m in MODEL_NAMES + ["pca_baseline"] if m in df.index]
+        df = df.loc[order]
+        df.to_csv(benchmark_dir / "benchmark_results.csv")
+        print(f"\nSaved: {benchmark_dir / 'benchmark_results.csv'}")
+
+        # Print summary table
+        print(f"\n{'Model':<16} {'Moran I':>8} {'ARI':>6} {'NMI':>6} {'CHAOS':>7} {'PAS':>6} {'ASW':>6}")
+        print("-" * 62)
+        for _, row in df.iterrows():
+            mi = f"{row['moran_i_mean']:.3f}" if pd.notna(row.get('moran_i_mean')) else "  -"
+            print(f"{row.name:<16} {mi:>8} {row['ARI']:>6.3f} {row['NMI']:>6.3f} "
+                  f"{row['CHAOS']:>7.4f} {row['PAS']:>6.3f} {row['ASW']:>6.3f}")
+
+
+def _resolve_configs(config_path: Path, config_name: str = "general.yaml") -> List[Path]:
+    """Resolve config path to list of general/per-model configs.
+
+    Mirrors JobRunner._resolve_configs() logic.
+    """
+    if config_path.is_dir():
+        matched = sorted(config_path.rglob(config_name))
+        if matched:
+            config_paths = []
+            for p in matched:
+                if Config.is_general_config(p):
+                    from ..generate import generate_configs
+                    generated = generate_configs(p)
+                    # We only need one config per dataset to get output_dir
+                    config_paths.append(next(iter(generated.values())))
+                else:
+                    config_paths.append(p)
+            return config_paths
+        # Fallback: all yamls
+        return sorted(config_path.rglob("*.yaml"))
+
+    if Config.is_general_config(config_path):
+        from ..generate import generate_configs
+        generated = generate_configs(config_path)
+        return [next(iter(generated.values()))]
+
+    return [config_path]
+
+
+def _unique_output_dirs(config_paths: List[Path]) -> List[Tuple[Path, Path]]:
+    """Deduplicate configs by output_dir, returning (output_dir, config_path) pairs."""
+    seen = set()
+    result = []
+    for p in config_paths:
+        cfg = Config.from_yaml(p)
+        od = cfg.output_dir
+        if od not in seen:
+            seen.add(od)
+            result.append((Path(od), p))
+    return result
+
+
+def run_from_cli(config: str, model_filter: tuple = (), include_baselines: bool = True,
+                 config_name: str = "general.yaml"):
+    """Entry point from CLI. Handles directory scoping."""
+    config_path = Path(config)
+    config_paths = _resolve_configs(config_path, config_name)
+
+    if not config_paths:
+        print("No configs found.")
+        return
+
+    targets = _unique_output_dirs(config_paths)
+    print(f"\nBenchmarking {len(targets)} dataset(s)...")
+
+    all_dfs = {}
+    benchmarked_output_dirs = []
+    for output_dir, cfg_path in targets:
+        dataset_label = "/".join(output_dir.parts[1:]) if len(output_dir.parts) > 1 else str(output_dir)
+        print(f"\n{'='*60}")
+        print(f"  Dataset: {dataset_label}")
+        print(f"{'='*60}")
+
+        if not (output_dir / "preprocessed").exists():
+            print(f"  Skipping (no preprocessed data)")
+            continue
+
+        run(str(cfg_path), model_filter=model_filter, include_baselines=include_baselines)
+
+        bm_csv = output_dir / "benchmark" / "benchmark_results.csv"
+        if bm_csv.exists():
+            all_dfs[dataset_label] = pd.read_csv(bm_csv, index_col="model")
+            benchmarked_output_dirs.append(output_dir)
+
+    # Save aggregate if multiple datasets
+    if len(all_dfs) > 1:
+        _save_aggregate(all_dfs, benchmarked_output_dirs)
+
+
+def _common_output_parent(output_dirs: list) -> Path:
+    """Find the common parent of all output directories."""
+    parts_list = [Path(d).parts for d in output_dirs]
+    common = []
+    for level in zip(*parts_list):
+        if len(set(level)) == 1:
+            common.append(level[0])
+        else:
+            break
+    return Path(*common) if common else Path("outputs")
+
+
+def _save_aggregate(all_dfs: dict, output_dirs: list):
+    """Save aggregate summary CSV in the common parent of all output dirs."""
+    agg_dir = _common_output_parent(output_dirs) / "benchmark_aggregate"
+    agg_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save per-dataset CSVs
+    for name, df in all_dfs.items():
+        safe_name = name.replace("/", "_")
+        df.to_csv(agg_dir / f"{safe_name}_results.csv")
+
+    # Compute mean ± std across datasets
+    combined = pd.concat(all_dfs.values(), keys=all_dfs.keys())
+    numeric_cols = combined.select_dtypes(include=[np.number]).columns
+    summary_mean = combined.groupby("model")[numeric_cols].mean()
+    summary_std = combined.groupby("model")[numeric_cols].std()
+
+    summary = summary_mean.round(4).astype(str) + " ± " + summary_std.round(4).astype(str)
+    summary.to_csv(agg_dir / "summary.csv")
+    print(f"\nAggregate saved: {agg_dir / 'summary.csv'}")
+
+    return agg_dir

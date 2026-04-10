@@ -113,6 +113,39 @@ def multianalyze(config, models, n_pairs, match_against, output):
     _run(config, list(models), n_pairs=n_pairs, match_against=match_against, output_path=output)
 
 
+@cli.command("benchmark")
+@click.option("--config", "-c", required=True, type=click.Path(exists=True),
+              help="Path to config YAML or directory (supports same scoping as 'run all')")
+@click.option("--no-baselines", is_flag=True, default=False,
+              help="Skip PCA baseline computation")
+@click.option("--config-name", default="general.yaml", show_default=True,
+              help="Config filename to search for when config is a directory")
+@click.option("--models", multiple=True, default=(),
+              help="Only benchmark these model names (e.g. --models svgp mggp_svgp)")
+def benchmark(config, no_baselines, config_name, models):
+    """Benchmark trained models with SDMBench metrics (Moran's I, ARI, NMI, CHAOS, ...).
+
+    \b
+    Runs benchmark analyze + figures. Supports same config scoping as 'run all':
+      - Per-model YAML:  benchmark that model only
+      - General YAML:    benchmark all 5 models for that dataset
+      - Directory:       benchmark all datasets found recursively
+
+    \b
+    EXAMPLES:
+        spatial_factorization benchmark -c configs/sdmbench/151507/general.yaml
+        spatial_factorization benchmark -c configs/sdmbench/
+        spatial_factorization benchmark -c configs/ --config-name general.yaml
+        spatial_factorization benchmark -c configs/sdmbench/ --no-baselines
+    """
+    from .commands.benchmark_analyze import run_from_cli as analyze_cli
+    from .commands.benchmark_figures import run_from_cli as figures_cli
+
+    analyze_cli(config, model_filter=models, include_baselines=not no_baselines,
+                config_name=config_name)
+    figures_cli(config, config_name=config_name)
+
+
 @cli.command("run")
 @click.argument("stages", nargs=-1, required=True)
 @click.option("--config", "-c", required=True, type=click.Path(exists=True), help="Path to config YAML or directory")

@@ -1,0 +1,249 @@
+"""Generate benchmark comparison figures.
+
+Single-dataset: bar chart comparing all models on all metrics.
+Multi-dataset: aggregate figure with mean +/- std bars.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Dict
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+
+from ..config import Config
+from .benchmark_analyze import _common_output_parent, _resolve_configs, _unique_output_dirs
+
+MODEL_ORDER = ["pca_baseline", "pnmf", "svgp", "mggp_svgp", "lcgp", "mggp_lcgp"]
+
+MODEL_LABELS = {
+    "pca_baseline": "PCA",
+    "pnmf": "PNMF",
+    "svgp": "SVGP",
+    "mggp_svgp": "MGGP-SVGP",
+    "lcgp": "LCGP",
+    "mggp_lcgp": "MGGP-LCGP",
+}
+
+MODEL_COLORS = {
+    "pca_baseline": "#999999",
+    "pnmf": "#e377c2",
+    "svgp": "#1f77b4",
+    "mggp_svgp": "#ff7f0e",
+    "lcgp": "#2ca02c",
+    "mggp_lcgp": "#d62728",
+}
+
+# Metric groupings for subplots
+METRIC_GROUPS = {
+    "Spatial Quality": ["moran_i_mean"],
+    "Accuracy": ["ARI", "NMI", "HOM", "COM"],
+    "Continuity": ["CHAOS", "PAS", "ASW"],
+}
+
+# Lower is better for these
+LOWER_IS_BETTER = {"CHAOS", "PAS"}
+
+
+def _order_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Reorder rows to canonical model order."""
+    order = [m for m in MODEL_ORDER if m in df.index]
+    return df.loc[order]
+
+
+def plot_single(benchmark_dir: Path, figures_dir: Path, dataset_name: str = ""):
+    """Bar chart comparing all models for one dataset."""
+    csv_path = benchmark_dir / "benchmark_results.csv"
+    if not csv_path.exists():
+        print(f"  No benchmark_results.csv found in {benchmark_dir}")
+        return
+
+    df = _order_df(pd.read_csv(csv_path, index_col="model"))
+    models = df.index.tolist()
+    labels = [MODEL_LABELS.get(m, m) for m in models]
+    colors = [MODEL_COLORS.get(m, "#666666") for m in models]
+
+    fig, axes = plt.subplots(1, 3, figsize=(16, 5))
+    title = f"Benchmark: {dataset_name}" if dataset_name else "Benchmark Results"
+    fig.suptitle(title, fontsize=14, fontweight="bold")
+
+    for ax, (group_name, metrics) in zip(axes, METRIC_GROUPS.items()):
+        available = [m for m in metrics if m in df.columns]
+        if not available:
+            ax.set_visible(False)
+            continue
+
+        x = np.arange(len(models))
+        width = 0.8 / max(len(available), 1)
+
+        for i, metric in enumerate(available):
+            vals = df[metric].values.astype(float)
+            offset = (i - (len(available) - 1) / 2) * width
+            bars = ax.bar(x + offset, vals, width * 0.9, color=colors, alpha=0.85)
+
+            # Label each bar if multiple metrics in group
+            if len(available) > 1:
+                for bar, val in zip(bars, vals):
+                    if not np.isnan(val):
+                        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height(),
+                                f"{val:.2f}", ha="center", va="bottom", fontsize=6)
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=9)
+        ax.set_title(group_name, fontsize=11)
+
+        if len(available) > 1:
+            ax.legend(available, fontsize=8, loc="upper right")
+        elif len(available) == 1:
+            ax.set_ylabel(available[0])
+
+        # Highlight Moran's I panel
+        if group_name == "Spatial Quality":
+            ax.set_facecolor("#f0f7ff")
+
+        # Annotate lower-is-better
+        lower_in_group = [m for m in available if m in LOWER_IS_BETTER]
+        if lower_in_group:
+            ax.text(0.02, 0.98, f"{', '.join(lower_in_group)}: lower = better",
+                    transform=ax.transAxes, fontsize=7, va="top", color="gray")
+
+    plt.tight_layout()
+    figures_dir.mkdir(parents=True, exist_ok=True)
+    out_path = figures_dir / "benchmark.png"
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved: {out_path}")
+
+
+def plot_aggregate(all_dfs: Dict[str, pd.DataFrame], figures_dir: Path):
+    """Boxplot grid across datasets — one subplot per metric, models on x-axis.
+
+    Each box shows the distribution across datasets for that model/metric pair.
+    Individual dataset values are overlaid as scatter points.
+    Layout: 3 columns, as many rows as needed (mirrors SDMBench benchmark figure).
+    """
+    # Stack all datasets into a long-form DataFrame
+    records = []
+    for dataset_name, df in all_dfs.items():
+        for model in df.index:
+            row = {"dataset": dataset_name, "model": model}
+            for col in df.columns:
+                row[col] = df.loc[model, col]
+            records.append(row)
+    long_df = pd.DataFrame(records)
+
+    # All metrics to plot (one subplot each)
+    all_metrics = ["moran_i_mean", "ARI", "NMI", "HOM", "COM", "CHAOS", "PAS", "ASW"]
+    available_metrics = [m for m in all_metrics if m in long_df.columns]
+
+    # Metric display names and category prefixes
+    metric_titles = {
+        "moran_i_mean": "Spatial Quality: Moran's I",
+        "ARI": "Accuracy: ARI",
+        "NMI": "Accuracy: NMI",
+        "HOM": "Accuracy: HOM",
+        "COM": "Accuracy: COM",
+        "CHAOS": "Continuity: CHAOS",
+        "PAS": "Continuity: PAS",
+        "ASW": "Continuity: ASW",
+    }
+
+    # Canonical model order (only those present)
+    models_present = [m for m in MODEL_ORDER if m in long_df["model"].unique()]
+    n_datasets = len(all_dfs)
+
+    ncols = 3
+    nrows = int(np.ceil(len(available_metrics) / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(5 * ncols, 4.5 * nrows))
+    axes = np.atleast_2d(axes)
+    fig.suptitle(f"Benchmark Comparison (n={n_datasets} datasets)", fontsize=14, fontweight="bold", y=1.01)
+
+    for idx, metric in enumerate(available_metrics):
+        row, col = divmod(idx, ncols)
+        ax = axes[row, col]
+
+        # Collect data per model in canonical order
+        box_data = []
+        box_colors = []
+        box_labels = []
+        for model in models_present:
+            vals = long_df.loc[long_df["model"] == model, metric].dropna().values.astype(float)
+            box_data.append(vals)
+            box_colors.append(MODEL_COLORS.get(model, "#666666"))
+            box_labels.append(MODEL_LABELS.get(model, model))
+
+        positions = np.arange(len(models_present))
+        bp = ax.boxplot(box_data, positions=positions, widths=0.6, patch_artist=True,
+                        showmeans=True, meanprops=dict(marker="D", markerfacecolor="white",
+                                                       markeredgecolor="black", markersize=4),
+                        medianprops=dict(color="black", linewidth=1.5),
+                        flierprops=dict(marker="o", markerfacecolor="none",
+                                        markeredgecolor="black", markersize=5))
+
+        for patch, color in zip(bp["boxes"], box_colors):
+            patch.set_facecolor(color)
+            patch.set_alpha(0.7)
+
+        # Overlay individual data points
+        for i, vals in enumerate(box_data):
+            jitter = np.random.default_rng(42).uniform(-0.15, 0.15, size=len(vals))
+            ax.scatter(positions[i] + jitter, vals, color=box_colors[i],
+                       alpha=0.5, s=15, zorder=3, edgecolors="gray", linewidths=0.5)
+
+        ax.set_xticks(positions)
+        ax.set_xticklabels([f"n={n_datasets}\n{lbl}" for lbl in box_labels],
+                           rotation=45, ha="right", fontsize=9)
+        ax.set_title(metric_titles.get(metric, metric), fontsize=11)
+        ax.set_ylabel("Value")
+        ax.set_xlabel("Method")
+
+    # Hide unused subplots
+    for idx in range(len(available_metrics), nrows * ncols):
+        row, col = divmod(idx, ncols)
+        axes[row, col].set_visible(False)
+
+    plt.tight_layout()
+    figures_dir.mkdir(parents=True, exist_ok=True)
+    out_path = figures_dir / "benchmark_aggregate.png"
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved: {out_path}")
+
+
+def run_single(output_dir: Path, dataset_name: str = ""):
+    """Generate benchmark figure for one dataset."""
+    benchmark_dir = output_dir / "benchmark"
+    figures_dir = output_dir / "figures"
+    plot_single(benchmark_dir, figures_dir, dataset_name=dataset_name)
+
+
+def run_from_cli(config: str, config_name: str = "general.yaml"):
+    """Entry point from CLI. Handles directory scoping."""
+    config_path = Path(config)
+    config_paths = _resolve_configs(config_path, config_name)
+
+    if not config_paths:
+        print("No configs found.")
+        return
+
+    targets = _unique_output_dirs(config_paths)
+    all_dfs = {}
+
+    for output_dir, cfg_path in targets:
+        dataset_label = "/".join(output_dir.parts[1:]) if len(output_dir.parts) > 1 else str(output_dir)
+        bm_csv = output_dir / "benchmark" / "benchmark_results.csv"
+
+        if not bm_csv.exists():
+            print(f"  Skipping {dataset_label} (no benchmark_results.csv)")
+            continue
+
+        run_single(output_dir, dataset_name=dataset_label)
+        all_dfs[dataset_label] = pd.read_csv(bm_csv, index_col="model")
+
+    if len(all_dfs) > 1:
+        # Aggregate figure goes in common parent of all output dirs
+        benchmarked_dirs = [od for od, _ in targets if (od / "benchmark" / "benchmark_results.csv").exists()]
+        agg_figures_dir = _common_output_parent(benchmarked_dirs) / "figures"
+        plot_aggregate(all_dfs, agg_figures_dir)
