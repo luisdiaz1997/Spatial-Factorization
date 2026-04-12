@@ -393,3 +393,24 @@ training:
 2. **CPU vs GPU:** Cholesky on `(L, C, K_post, K_post)` is compute-heavy. Current code runs on whatever device the model is on. GPU ~10x faster for large Cholesky.
 
 3. **Default K_post:** Plan says 2000. Could also be `null` (disabled) by default and only enabled via CLI `--posterior-k 2000` or config `posterior_K: 2000`.
+
+---
+
+## Testing
+
+After implementation, test on the already-trained slideseq MGGP_LCGP model:
+
+```bash
+# Run analyze with expanded-K posterior (K_post=2000)
+spatial_factorization analyze -c configs/slideseq/mggp_lcgp.yaml --posterior-k 2000
+
+# Then regenerate figures (--no-heatmap to skip slow heatmaps)
+spatial_factorization figures -c configs/slideseq/mggp_lcgp.yaml --no-heatmap
+```
+
+**What to verify:**
+- Groupwise factor files are written to `outputs/slideseq/mggp_lcgp/groupwise_factors/group_{0..13}.npy`
+- Each file has shape `(41783, 10)`
+- Factors are non-negative (exp-space)
+- Spatial plots in figures stage look smoother than the K=50 baseline
+- No OOM on GPU (should stay within ~8 GB budget with C=12 chunks)
