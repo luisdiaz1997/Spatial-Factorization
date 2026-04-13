@@ -1,0 +1,72 @@
+{
+  "start_time": "2026-04-05T18:16:58.569038",
+  "end_time": "2026-04-05T18:27:14.051404",
+  "elapsed_seconds": 615.482366,
+  "jobs": {
+    "slideseq_lcgp": {
+      "config_path": "configs/slideseq/lcgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "slideseq_test_lcgp": {
+      "config_path": "configs/slideseq/lcgp_test.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "slideseq_mggp_lcgp": {
+      "config_path": "configs/slideseq/mggp_lcgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "slideseq_test_mggp_lcgp": {
+      "config_path": "configs/slideseq/mggp_lcgp_test.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "slideseq_mggp_svgp": {
+      "config_path": "configs/slideseq/mggp_svgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "slideseq_pnmf": {
+      "config_path": "configs/slideseq/pnmf.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "slideseq_svgp": {
+      "config_path": "configs/slideseq/svgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "slideseq_test_svgp": {
+      "config_path": "configs/slideseq/svgp_no_groups_test.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "slideseq_test_mggp_svgp": {
+      "config_path": "configs/slideseq/svgp_test.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "slideseq_pnmf_scaled": {
+      "config_path": "configs/slideseq/video/pnmf_scaled.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "slideseq_pnmf_unscaled": {
+      "config_path": "configs/slideseq/video/pnmf_unscaled.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "slideseq_svgp_scaled": {
+      "config_path": "configs/slideseq/video/svgp_scaled.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "slideseq_svgp_unscaled": {
+      "config_path": "configs/slideseq/video/svgp_unscaled.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    }
+  }
+}

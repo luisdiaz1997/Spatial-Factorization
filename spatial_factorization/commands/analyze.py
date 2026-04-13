@@ -623,11 +623,57 @@ def _get_groupwise_factors_batched(
     return result
 
 
+def _compute_chunk_posterior_params(knn_idx, mu, Lu_raw, Z, groupsZ, kernel, jitter, add_jitter_fn):
+    """Compute Kzz cholesky and transformed mu for a chunk of KNN indices.
+
+    Returns: (L_kzz, Z_nbr, gZ_nbr, mu_t) tensors for posterior computation.
+    """
+    mu_knn = mu[:, knn_idx]                           # (L, c, K_post)
+    Lu_knn = Lu_raw[:, knn_idx]                       # (L, c, K_post, R)
+    Su_knn = Lu_knn @ Lu_knn.transpose(-2, -1)        # (L, c, K_post, K_post)
+    add_jitter_fn(Su_knn, jitter)
+    L_su = torch.linalg.cholesky(Su_knn)              # (L, c, K_post, K_post)
+    del Lu_knn, Su_knn
+
+    Z_nbr = Z[knn_idx]                                # (c, K_post, 2)
+    gZ_nbr = groupsZ[knn_idx]                         # (c, K_post)
+
+    Kzz = torch.vmap(lambda z, gz: kernel(z, z, gz, gz))(Z_nbr, gZ_nbr).contiguous()
+    add_jitter_fn(Kzz, jitter)
+    L_kzz = torch.linalg.cholesky(Kzz)               # (c, K_post, K_post)
+    del Kzz
+
+    stacked = torch.cat([mu_knn.unsqueeze(-1), L_su], dim=-1)
+    X_sol = torch.linalg.solve_triangular(L_kzz, stacked, upper=False)
+    mu_t = X_sol[..., 0]     # (L, c, K_post)
+    del stacked, X_sol, L_su, mu_knn
+
+    return L_kzz, Z_nbr, gZ_nbr, mu_t
+
+
+def _compute_group_posterior(g, L_kzz, Z_nbr, gZ_nbr, mu_t, X_chunk, kernel, device, sort_order):
+    """Compute posterior factors for a single group given precomputed Kzz params."""
+    c = X_chunk.shape[0]
+    gX_g = torch.full((c, 1), g, dtype=torch.long, device=device)
+
+    Kzx_g = torch.vmap(
+        lambda z, x, gz, gx: kernel(z, x, gz, gx)
+    )(Z_nbr, X_chunk, gZ_nbr, gX_g)              # (c, K_post, 1)
+
+    Wt_g = torch.linalg.solve_triangular(L_kzz, Kzx_g, upper=False)
+    W_g = Wt_g.transpose(-2, -1)                  # (c, 1, K_post)
+
+    mean_g = (W_g @ mu_t.unsqueeze(-1)).squeeze(-1).squeeze(-1)  # (L, c)
+    factors_g = torch.exp(mean_g).T.cpu().numpy()  # (c, L)
+    return factors_g[:, sort_order]
+
+
 def _get_groupwise_factors_expanded_K(
     model, coords, groups, n_groups: int,
     sort_order: np.ndarray,
     K_post: int = 2000,
     mem_gb: float = 8.0,
+    knn_groups_mode: str = "original",
 ) -> dict:
     """Expanded-K posterior for MGGP_LCGP groupwise factors.
 
@@ -642,6 +688,9 @@ def _get_groupwise_factors_expanded_K(
         sort_order: Moran's I sort indices (applied to factor columns)
         K_post:     Number of posterior neighbors (>> K_train)
         mem_gb:     GPU memory budget in GB (controls chunk size)
+        knn_groups_mode: How to compute groupsX for probabilistic KNN:
+            - "original": compute KNN once with actual groups [0,2,3,3,...] (default)
+            - "derived": compute KNN per group with groupsX=[g,g,g,...] (old batched behavior)
 
     Returns:
         dict {g: (N, L) float32 array} — exp-space posterior means, Moran's I sorted
@@ -676,15 +725,29 @@ def _get_groupwise_factors_expanded_K(
     else:
         groups_t = groups.cpu()
 
-    # Compute K_post neighbors for ALL N points ONCE — local variable, never stored on model
-    print(f"  Computing K_post={K_post} neighbors (strategy={strategy})...", flush=True)
-    if strategy == 'knn':
-        knn_idx_all = _faiss_knn(coords_t, Z, K_post)[:, :-1]  # (N, K_post) on CPU
-    else:  # probabilistic
-        knn_idx_all = _probabilistic_knn(
-            coords_t, Z, K_post, kernel,
-            multigroup=True, groupsX=groups_t, groupsZ=groupsZ.cpu(),
-        )[:, :-1]  # (N, K_post) on CPU
+    # Compute K_post neighbors — mode determines groupsX for probabilistic KNN
+    # "original": shared KNN with actual groups [0,2,3,3,...] (default)
+    # "derived": per-group KNN with groupsX=[g,g,g,...] (matches old _get_groupwise_factors_batched)
+    use_per_group_knn = (knn_groups_mode == "derived" and strategy == "probabilistic")
+
+    if use_per_group_knn:
+        print(f"  Computing K_post={K_post} neighbors per group (strategy={strategy}, mode=derived)...", flush=True)
+        knn_idx_per_group = {}
+        for g in range(n_groups):
+            groups_g = torch.full((N,), g, dtype=torch.long)
+            knn_idx_per_group[g] = _probabilistic_knn(
+                coords_t, Z, K_post, kernel,
+                multigroup=True, groupsX=groups_g, groupsZ=groupsZ.cpu(),
+            )[:, :-1]
+    else:
+        print(f"  Computing K_post={K_post} neighbors (strategy={strategy}, mode={knn_groups_mode})...", flush=True)
+        if strategy == 'knn':
+            knn_idx_all = _faiss_knn(coords_t, Z, K_post)[:, :-1]
+        else:
+            knn_idx_all = _probabilistic_knn(
+                coords_t, Z, K_post, kernel,
+                multigroup=True, groupsX=groups_t, groupsZ=groupsZ.cpu(),
+            )[:, :-1]
 
     result = {g: np.empty((N, L), dtype=np.float32) for g in range(n_groups)}
     n_chunks = (N + C - 1) // C
@@ -696,52 +759,32 @@ def _get_groupwise_factors_expanded_K(
             print(f"  Chunk {chunk_i + 1}/{n_chunks} ({c} pts, K_post={K_post})...",
                   end="\r", flush=True)
 
-            # --- Step 1: Index into precomputed KNN (ONCE per chunk) ---
-            knn_idx = knn_idx_all[start:end].to(device)  # (c, K_post)
+            X_chunk = coords_t[start:end].unsqueeze(1)  # (c, 1, 2)
 
-            # --- Step 2: Gather variational params (ONCE) ---
-            mu_knn = mu[:, knn_idx]                           # (L, c, K_post)
-            Lu_knn = Lu_raw[:, knn_idx]                       # (L, c, K_post, R)
-            Su_knn = Lu_knn @ Lu_knn.transpose(-2, -1)        # (L, c, K_post, K_post)
-            add_jitter(Su_knn, gp.jitter)
-            L_su = torch.linalg.cholesky(Su_knn)              # (L, c, K_post, K_post)
-            del Lu_knn, Su_knn
-
-            # --- Step 3: Neighbor kernel Kzz (ONCE, fixed groups) ---
-            Z_nbr = Z[knn_idx]                                # (c, K_post, 2)
-            gZ_nbr = groupsZ[knn_idx]                         # (c, K_post)
-
-            Kzz = torch.vmap(
-                lambda z, gz: kernel(z, z, gz, gz)
-            )(Z_nbr, gZ_nbr).contiguous()                     # (c, K_post, K_post)
-            add_jitter(Kzz, gp.jitter)
-            L_kzz = torch.linalg.cholesky(Kzz)               # (c, K_post, K_post)
-            del Kzz
-
-            # --- Step 4: Transform variables (ONCE) ---
-            stacked = torch.cat([mu_knn.unsqueeze(-1), L_su], dim=-1)  # (L, c, K_post, K_post+1)
-            X_sol = torch.linalg.solve_triangular(L_kzz, stacked, upper=False)
-            mu_t = X_sol[..., 0]     # (L, c, K_post)
-            del stacked, X_sol, L_su, mu_knn
-
-            # --- Step 5: Per-group posterior (cheap per group) ---
-            X_chunk = coords_t[start:end].unsqueeze(1)        # (c, 1, 2)
-
-            for g in range(n_groups):
-                gX_g = torch.full((c, 1), g, dtype=torch.long, device=device)
-
-                Kzx_g = torch.vmap(
-                    lambda z, x, gz, gx: kernel(z, x, gz, gx)
-                )(Z_nbr, X_chunk, gZ_nbr, gX_g)              # (c, K_post, 1)
-
-                Wt_g = torch.linalg.solve_triangular(L_kzz, Kzx_g, upper=False)  # (c, K_post, 1)
-                W_g = Wt_g.transpose(-2, -1)                  # (c, 1, K_post)
-
-                mean_g = (W_g @ mu_t.unsqueeze(-1)).squeeze(-1).squeeze(-1)  # (L, c)
-                factors_g = torch.exp(mean_g).T.cpu().numpy()  # (c, L)
-                result[g][start:end] = factors_g[:, sort_order]
-
-            del L_kzz, Z_nbr, gZ_nbr, mu_t
+            if use_per_group_knn:
+                # Per-group mode: compute Kzz/mu_t per group
+                for g in range(n_groups):
+                    print(f"  Chunk {chunk_i + 1}/{n_chunks}, Group {g + 1}/{n_groups}...",
+                          end="\r", flush=True)
+                    knn_idx = knn_idx_per_group[g][start:end].to(device)
+                    L_kzz, Z_nbr, gZ_nbr, mu_t = _compute_chunk_posterior_params(
+                        knn_idx, mu, Lu_raw, Z, groupsZ, kernel, gp.jitter, add_jitter
+                    )
+                    result[g][start:end] = _compute_group_posterior(
+                        g, L_kzz, Z_nbr, gZ_nbr, mu_t, X_chunk, kernel, device, sort_order
+                    )
+                    del L_kzz, Z_nbr, gZ_nbr, mu_t
+            else:
+                # Shared KNN mode: compute Kzz/mu_t once, reuse for all groups
+                knn_idx = knn_idx_all[start:end].to(device)
+                L_kzz, Z_nbr, gZ_nbr, mu_t = _compute_chunk_posterior_params(
+                    knn_idx, mu, Lu_raw, Z, groupsZ, kernel, gp.jitter, add_jitter
+                )
+                for g in range(n_groups):
+                    result[g][start:end] = _compute_group_posterior(
+                        g, L_kzz, Z_nbr, gZ_nbr, mu_t, X_chunk, kernel, device, sort_order
+                    )
+                del L_kzz, Z_nbr, gZ_nbr, mu_t
 
     print()  # newline after \r progress
     return result
@@ -774,7 +817,7 @@ def _compute_moran_i(factors: np.ndarray, coords: np.ndarray) -> tuple:
         return idx, df["I"].to_numpy()
 
 
-def run(config_path: str, probabilistic: bool = False, posterior_k: int | None = None, posterior_mem_gb: float | None = None):
+def run(config_path: str, probabilistic: bool = False, posterior_k: int | None = None, posterior_mem_gb: float | None = None, knn_groups_mode: str = "original"):
     """Analyze a trained PNMF model.
 
     Output files (outputs/{dataset}/{model}/):
@@ -923,10 +966,10 @@ def run(config_path: str, probabilistic: bool = False, posterior_k: int | None =
 
         if _is_lcgp and _posterior_k is not None:
             _mem_gb = posterior_mem_gb or config.training.get("posterior_mem_gb", 8.0)
-            print(f"  Using expanded-K posterior: K_post={_posterior_k}, mem_gb={_mem_gb}")
+            print(f"  Using expanded-K posterior: K_post={_posterior_k}, mem_gb={_mem_gb}, knn_mode={knn_groups_mode}")
             groupwise = _get_groupwise_factors_expanded_K(
                 model, coords, groups, data.n_groups, sort_order,
-                K_post=_posterior_k, mem_gb=_mem_gb,
+                K_post=_posterior_k, mem_gb=_mem_gb, knn_groups_mode=knn_groups_mode,
             )
         else:
             groupwise = _get_groupwise_factors_batched(

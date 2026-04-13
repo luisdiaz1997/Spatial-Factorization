@@ -1,0 +1,307 @@
+{
+  "start_time": "2026-04-03T21:37:38.361992",
+  "end_time": "2026-04-04T14:01:20.219393",
+  "elapsed_seconds": 59021.857401,
+  "jobs": {
+    "sdmbench_151507_pnmf": {
+      "config_path": "configs/sdmbench/151507/pnmf.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151507_svgp": {
+      "config_path": "configs/sdmbench/151507/svgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151507_mggp_svgp": {
+      "config_path": "configs/sdmbench/151507/mggp_svgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151507_lcgp": {
+      "config_path": "configs/sdmbench/151507/lcgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151507_mggp_lcgp": {
+      "config_path": "configs/sdmbench/151507/mggp_lcgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151508_pnmf": {
+      "config_path": "configs/sdmbench/151508/pnmf.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151508_svgp": {
+      "config_path": "configs/sdmbench/151508/svgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151508_mggp_svgp": {
+      "config_path": "configs/sdmbench/151508/mggp_svgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151508_lcgp": {
+      "config_path": "configs/sdmbench/151508/lcgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151508_mggp_lcgp": {
+      "config_path": "configs/sdmbench/151508/mggp_lcgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151509_pnmf": {
+      "config_path": "configs/sdmbench/151509/pnmf.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151509_svgp": {
+      "config_path": "configs/sdmbench/151509/svgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151509_mggp_svgp": {
+      "config_path": "configs/sdmbench/151509/mggp_svgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151509_lcgp": {
+      "config_path": "configs/sdmbench/151509/lcgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151509_mggp_lcgp": {
+      "config_path": "configs/sdmbench/151509/mggp_lcgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151510_pnmf": {
+      "config_path": "configs/sdmbench/151510/pnmf.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151510_svgp": {
+      "config_path": "configs/sdmbench/151510/svgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151510_mggp_svgp": {
+      "config_path": "configs/sdmbench/151510/mggp_svgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151510_lcgp": {
+      "config_path": "configs/sdmbench/151510/lcgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151510_mggp_lcgp": {
+      "config_path": "configs/sdmbench/151510/mggp_lcgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151669_pnmf": {
+      "config_path": "configs/sdmbench/151669/pnmf.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151669_svgp": {
+      "config_path": "configs/sdmbench/151669/svgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151669_mggp_svgp": {
+      "config_path": "configs/sdmbench/151669/mggp_svgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151669_lcgp": {
+      "config_path": "configs/sdmbench/151669/lcgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151669_mggp_lcgp": {
+      "config_path": "configs/sdmbench/151669/mggp_lcgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151670_pnmf": {
+      "config_path": "configs/sdmbench/151670/pnmf.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151670_svgp": {
+      "config_path": "configs/sdmbench/151670/svgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151670_mggp_svgp": {
+      "config_path": "configs/sdmbench/151670/mggp_svgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151670_lcgp": {
+      "config_path": "configs/sdmbench/151670/lcgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151670_mggp_lcgp": {
+      "config_path": "configs/sdmbench/151670/mggp_lcgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151671_pnmf": {
+      "config_path": "configs/sdmbench/151671/pnmf.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151671_svgp": {
+      "config_path": "configs/sdmbench/151671/svgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151671_mggp_svgp": {
+      "config_path": "configs/sdmbench/151671/mggp_svgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151671_lcgp": {
+      "config_path": "configs/sdmbench/151671/lcgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151671_mggp_lcgp": {
+      "config_path": "configs/sdmbench/151671/mggp_lcgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151672_pnmf": {
+      "config_path": "configs/sdmbench/151672/pnmf.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151672_svgp": {
+      "config_path": "configs/sdmbench/151672/svgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151672_mggp_svgp": {
+      "config_path": "configs/sdmbench/151672/mggp_svgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151672_lcgp": {
+      "config_path": "configs/sdmbench/151672/lcgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151672_mggp_lcgp": {
+      "config_path": "configs/sdmbench/151672/mggp_lcgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151673_pnmf": {
+      "config_path": "configs/sdmbench/151673/pnmf.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151673_svgp": {
+      "config_path": "configs/sdmbench/151673/svgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151673_mggp_svgp": {
+      "config_path": "configs/sdmbench/151673/mggp_svgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151673_lcgp": {
+      "config_path": "configs/sdmbench/151673/lcgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151673_mggp_lcgp": {
+      "config_path": "configs/sdmbench/151673/mggp_lcgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151674_pnmf": {
+      "config_path": "configs/sdmbench/151674/pnmf.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151674_svgp": {
+      "config_path": "configs/sdmbench/151674/svgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151674_mggp_svgp": {
+      "config_path": "configs/sdmbench/151674/mggp_svgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151674_lcgp": {
+      "config_path": "configs/sdmbench/151674/lcgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151674_mggp_lcgp": {
+      "config_path": "configs/sdmbench/151674/mggp_lcgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151675_pnmf": {
+      "config_path": "configs/sdmbench/151675/pnmf.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151675_svgp": {
+      "config_path": "configs/sdmbench/151675/svgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151675_mggp_svgp": {
+      "config_path": "configs/sdmbench/151675/mggp_svgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151675_lcgp": {
+      "config_path": "configs/sdmbench/151675/lcgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151675_mggp_lcgp": {
+      "config_path": "configs/sdmbench/151675/mggp_lcgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151676_pnmf": {
+      "config_path": "configs/sdmbench/151676/pnmf.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151676_svgp": {
+      "config_path": "configs/sdmbench/151676/svgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151676_mggp_svgp": {
+      "config_path": "configs/sdmbench/151676/mggp_svgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151676_lcgp": {
+      "config_path": "configs/sdmbench/151676/lcgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    },
+    "sdmbench_151676_mggp_lcgp": {
+      "config_path": "configs/sdmbench/151676/mggp_lcgp.yaml",
+      "status": "completed",
+      "elapsed": 0.0
+    }
+  }
+}

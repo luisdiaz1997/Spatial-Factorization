@@ -149,6 +149,7 @@ class JobRunner:
         probabilistic: bool = False,
         posterior_k: int | None = None,
         posterior_mem_gb: float | None = None,
+        groups_derived: bool = False,
     ):
         """Initialize the job runner.
 
@@ -178,6 +179,7 @@ class JobRunner:
         self.probabilistic = probabilistic
         self.posterior_k = posterior_k
         self.posterior_mem_gb = posterior_mem_gb
+        self.groups_derived = groups_derived
         self.jobs: List[Job] = []
         self.run_status = RunStatus()
         self.status_manager = StatusManager()
@@ -698,6 +700,8 @@ class JobRunner:
             cmd += ["--posterior-k", str(self.posterior_k)]
         if self.posterior_mem_gb is not None and "analyze" in stages:
             cmd += ["--posterior-mem-gb", str(self.posterior_mem_gb)]
+        if self.groups_derived and "analyze" in stages:
+            cmd.append("--groups-derived")
         cmd += ["-c", str(job.config_path)]
 
         try:
@@ -748,6 +752,8 @@ class JobRunner:
             cmd += ["--posterior-k", str(self.posterior_k)]
         if stage == "analyze" and self.posterior_mem_gb is not None:
             cmd += ["--posterior-mem-gb", str(self.posterior_mem_gb)]
+        if stage == "analyze" and self.groups_derived:
+            cmd.append("--groups-derived")
 
         env = dict(os.environ)
         if force_cpu:
