@@ -651,6 +651,11 @@ def _get_groupwise_factors_expanded_K(
 
     gp = model._prior
     kernel = gp.kernel
+
+    # Use GPU if available — model may have been loaded on CPU via map_location="cpu"
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    gp.to(device)
+
     mu = gp.mu                    # (L, M)
     Lu_raw = gp.Lu                # (L, M, R)
     Z = gp.Z                      # (M, 2)
@@ -659,7 +664,6 @@ def _get_groupwise_factors_expanded_K(
     strategy = getattr(model, 'neighbors', 'knn')
     L = mu.shape[0]
     N = coords.shape[0] if hasattr(coords, 'shape') else len(coords)
-    device = mu.device
 
     # Adaptive chunk size: ~4 live (L, C, K_post, K_post) tensors
     C = max(1, int(mem_gb * 1e9 / (L * K_post ** 2 * 4 * 4)))
