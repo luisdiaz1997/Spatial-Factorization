@@ -52,7 +52,7 @@ def train(config, resume, video, probabilistic):
 @click.option("--posterior-k", default=None, type=int,
               help="Expanded K for LCGP groupwise posterior (overrides config posterior_K)")
 @click.option("--posterior-mem-gb", default=None, type=float,
-              help="GPU memory budget in GB for expanded-K posterior chunking (overrides config posterior_mem_gb)")
+              help="Memory budget in GB for expanded-K posterior chunking (overrides config posterior_mem_gb)")
 @click.option("--groups-derived", is_flag=True, default=False,
               help="Use derived per-group KNN for expanded-K posterior (groupsX=[g,g,g,...] per group, old batched behavior)")
 def analyze(config, probabilistic, posterior_k, posterior_mem_gb, groups_derived):
@@ -167,7 +167,7 @@ def benchmark(config, no_baselines, config_name, models):
 @click.option("--skip-general", is_flag=True, default=False, help="Skip general configs; run all non-general yamls in the directory as per-model configs")
 @click.option("--probabilistic", is_flag=True, default=False, help="Override saved KNN strategy in analyze stage to use probabilistic neighbor sampling")
 @click.option("--posterior-k", default=None, type=int, help="Expanded K for LCGP groupwise posterior (passed to analyze stage)")
-@click.option("--posterior-mem-gb", default=None, type=float, help="GPU memory budget in GB for expanded-K posterior chunking")
+@click.option("--posterior-mem-gb", default=None, type=float, help="Memory budget in GB for expanded-K posterior chunking")
 @click.option("--groups-derived", is_flag=True, default=False, help="Use derived per-group KNN for expanded-K posterior (groupsX=[g,g,g,...] per group)")
 def run_pipeline(stages, config, force, dry_run, resume, video, gpu_only, config_name, failed_only, no_heatmap, skip_general, probabilistic, posterior_k, posterior_mem_gb, groups_derived):
     """Run pipeline stages sequentially, or run all models in parallel.

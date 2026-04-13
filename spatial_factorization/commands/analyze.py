@@ -715,7 +715,7 @@ def _get_groupwise_factors_expanded_K(
         n_groups:   Number of groups G
         sort_order: Moran's I sort indices (applied to factor columns)
         K_post:     Number of posterior neighbors (>> K_train)
-        mem_gb:     GPU memory budget in GB (controls chunk size)
+        mem_gb:     Memory budget in GB (controls chunk size)
         knn_groups_mode: How to compute groupsX for probabilistic KNN:
             - "original": compute KNN once with actual groups [0,2,3,3,...] (default)
             - "derived": compute KNN per group with groupsX=[g,g,g,...] (old batched behavior)
