@@ -147,6 +147,7 @@ class JobRunner:
         no_heatmap: bool = False,
         skip_general: bool = False,
         probabilistic: bool = False,
+        posterior_k: int | None = None,
     ):
         """Initialize the job runner.
 
@@ -174,6 +175,7 @@ class JobRunner:
         self.no_heatmap = no_heatmap
         self.skip_general = skip_general
         self.probabilistic = probabilistic
+        self.posterior_k = posterior_k
         self.jobs: List[Job] = []
         self.run_status = RunStatus()
         self.status_manager = StatusManager()
@@ -690,6 +692,8 @@ class JobRunner:
             cmd.append("--no-heatmap")
         if self.probabilistic and (("analyze" in stages) or ("train" in stages)):
             cmd.append("--probabilistic")
+        if self.posterior_k is not None and "analyze" in stages:
+            cmd += ["--posterior-k", str(self.posterior_k)]
         cmd += ["-c", str(job.config_path)]
 
         try:
@@ -736,6 +740,8 @@ class JobRunner:
             cmd.append("--no-heatmap")
         if stage in ("analyze", "train") and self.probabilistic:
             cmd.append("--probabilistic")
+        if stage == "analyze" and self.posterior_k is not None:
+            cmd += ["--posterior-k", str(self.posterior_k)]
 
         env = dict(os.environ)
         if force_cpu:
