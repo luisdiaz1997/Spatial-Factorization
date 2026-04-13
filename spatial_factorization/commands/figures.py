@@ -2311,7 +2311,7 @@ def run(config_path: str, no_heatmap: bool = False):
             print(f"  Saved: {figures_dir}/groupwise_factors_3d_complete.png")
 
         # 7. Per-cell-type summary: factors + conditional factors + top/bottom enriched genes
-        if gene_enrichment is not None and gene_names is not None:
+        if not no_heatmap and gene_enrichment is not None and gene_names is not None:
             # Load Y (raw counts) for gene expression panels
             Y_ct = data.Y.numpy()
             if Y_ct.shape[0] != factors.shape[0]:
@@ -2339,7 +2339,7 @@ def run(config_path: str, no_heatmap: bool = False):
             print(f"  Saved: {celltype_summary_dir}/celltype_*.png ({len(sorted_group_ids)} files)")
 
         # 8. Per-cell-type summary: top/bottom genes by normedW_c (no enrichment ratio)
-        if group_loadings is not None and gene_names is not None:
+        if not no_heatmap and group_loadings is not None and gene_names is not None:
             Y_wc = data.Y.numpy()
             if Y_wc.shape[0] != factors.shape[0]:
                 Y_wc = Y_wc.T
