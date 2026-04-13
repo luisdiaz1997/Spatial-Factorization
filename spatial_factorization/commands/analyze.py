@@ -665,9 +665,9 @@ def _get_groupwise_factors_expanded_K(
     L = mu.shape[0]
     N = coords.shape[0] if hasattr(coords, 'shape') else len(coords)
 
-    # Dominant tensors per chunk: 2x (C, K_post, K_post) for Kzz/L_kzz (no L dim)
-    # mu_t is (L, C, K_post) — much smaller. Per-group Kzx_g is (C, K_post, 1).
-    C = max(1, min(N, int(mem_gb * 1e9 / (K_post ** 2 * 4 * 2))))
+    # Dominant tensors per chunk: 2x (C, K_post, K_post) for Kzz/L_kzz (no L dim).
+    # Reserve 2 GB for model params, CUDA context, mu_knn/mu_t/Z_nbr overhead.
+    C = max(1, min(N, int((mem_gb - 2.0) * 1e9 / (K_post ** 2 * 4 * 2))))
 
     # Convert coords to tensor
     if isinstance(coords, np.ndarray):
