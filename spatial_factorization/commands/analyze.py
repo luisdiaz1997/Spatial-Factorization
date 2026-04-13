@@ -665,8 +665,9 @@ def _get_groupwise_factors_expanded_K(
     L = mu.shape[0]
     N = coords.shape[0] if hasattr(coords, 'shape') else len(coords)
 
-    # Adaptive chunk size: ~4 live (L, C, K_post, K_post) tensors
-    C = max(1, int(mem_gb * 1e9 / (L * K_post ** 2 * 4 * 4)))
+    # Dominant tensors per chunk: 2x (C, K_post, K_post) for Kzz/L_kzz (no L dim)
+    # mu_t is (L, C, K_post) — much smaller. Per-group Kzx_g is (C, K_post, 1).
+    C = max(1, min(N, int(mem_gb * 1e9 / (K_post ** 2 * 4 * 2))))
 
     # Convert coords to tensor
     if isinstance(coords, np.ndarray):
@@ -703,13 +704,9 @@ def _get_groupwise_factors_expanded_K(
             # --- Step 1: Index into precomputed KNN (ONCE per chunk) ---
             knn_idx = knn_idx_all[start:end].to(device)  # (c, K_post)
 
-            # --- Step 2: Gather variational params (ONCE) ---
+            # --- Step 2: Gather variational MEAN only (Lu not needed for mean-only posterior) ---
+            # Posterior mean = Kzx^T @ Kzz^{-1} @ mu_knn — no covariance Lu involved.
             mu_knn = mu[:, knn_idx]                           # (L, c, K_post)
-            Lu_knn = Lu_raw[:, knn_idx]                       # (L, c, K_post, R)
-            Su_knn = Lu_knn @ Lu_knn.transpose(-2, -1)        # (L, c, K_post, K_post)
-            add_jitter(Su_knn, gp.jitter)
-            L_su = torch.linalg.cholesky(Su_knn)              # (L, c, K_post, K_post)
-            del Lu_knn, Su_knn
 
             # --- Step 3: Neighbor kernel Kzz (ONCE, fixed groups) ---
             Z_nbr = Z[knn_idx]                                # (c, K_post, 2)
@@ -722,11 +719,11 @@ def _get_groupwise_factors_expanded_K(
             L_kzz = torch.linalg.cholesky(Kzz)               # (c, K_post, K_post)
             del Kzz
 
-            # --- Step 4: Transform variables (ONCE) ---
-            stacked = torch.cat([mu_knn.unsqueeze(-1), L_su], dim=-1)  # (L, c, K_post, K_post+1)
-            X_sol = torch.linalg.solve_triangular(L_kzz, stacked, upper=False)
-            mu_t = X_sol[..., 0]     # (L, c, K_post)
-            del stacked, X_sol, L_su, mu_knn
+            # --- Step 4: Transform mu only: mu_t = L_kzz^{-1} @ mu_knn ---
+            mu_t = torch.linalg.solve_triangular(
+                L_kzz, mu_knn.unsqueeze(-1), upper=False
+            ).squeeze(-1).clone()   # (L, c, K_post) — .clone() frees the solve buffer
+            del mu_knn
 
             # --- Step 5: Per-group posterior (cheap per group) ---
             X_chunk = coords_t[start:end].unsqueeze(1)        # (c, 1, 2)
