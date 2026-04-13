@@ -774,7 +774,7 @@ def _compute_moran_i(factors: np.ndarray, coords: np.ndarray) -> tuple:
         return idx, df["I"].to_numpy()
 
 
-def run(config_path: str, probabilistic: bool = False, posterior_k: int | None = None):
+def run(config_path: str, probabilistic: bool = False, posterior_k: int | None = None, posterior_mem_gb: float | None = None):
     """Analyze a trained PNMF model.
 
     Output files (outputs/{dataset}/{model}/):
@@ -922,7 +922,7 @@ def run(config_path: str, probabilistic: bool = False, posterior_k: int | None =
         _is_lcgp = not hasattr(model._prior.Lu, '_raw')
 
         if _is_lcgp and _posterior_k is not None:
-            _mem_gb = config.training.get("posterior_mem_gb", 8.0)
+            _mem_gb = posterior_mem_gb or config.training.get("posterior_mem_gb", 8.0)
             print(f"  Using expanded-K posterior: K_post={_posterior_k}, mem_gb={_mem_gb}")
             groupwise = _get_groupwise_factors_expanded_K(
                 model, coords, groups, data.n_groups, sort_order,

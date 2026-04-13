@@ -148,6 +148,7 @@ class JobRunner:
         skip_general: bool = False,
         probabilistic: bool = False,
         posterior_k: int | None = None,
+        posterior_mem_gb: float | None = None,
     ):
         """Initialize the job runner.
 
@@ -176,6 +177,7 @@ class JobRunner:
         self.skip_general = skip_general
         self.probabilistic = probabilistic
         self.posterior_k = posterior_k
+        self.posterior_mem_gb = posterior_mem_gb
         self.jobs: List[Job] = []
         self.run_status = RunStatus()
         self.status_manager = StatusManager()
@@ -694,6 +696,8 @@ class JobRunner:
             cmd.append("--probabilistic")
         if self.posterior_k is not None and "analyze" in stages:
             cmd += ["--posterior-k", str(self.posterior_k)]
+        if self.posterior_mem_gb is not None and "analyze" in stages:
+            cmd += ["--posterior-mem-gb", str(self.posterior_mem_gb)]
         cmd += ["-c", str(job.config_path)]
 
         try:
@@ -742,6 +746,8 @@ class JobRunner:
             cmd.append("--probabilistic")
         if stage == "analyze" and self.posterior_k is not None:
             cmd += ["--posterior-k", str(self.posterior_k)]
+        if stage == "analyze" and self.posterior_mem_gb is not None:
+            cmd += ["--posterior-mem-gb", str(self.posterior_mem_gb)]
 
         env = dict(os.environ)
         if force_cpu:
