@@ -651,11 +651,6 @@ def _get_groupwise_factors_expanded_K(
 
     gp = model._prior
     kernel = gp.kernel
-
-    # Use GPU if available — model may have been loaded on CPU via map_location="cpu"
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    gp.to(device)
-
     mu = gp.mu                    # (L, M)
     Lu_raw = gp.Lu                # (L, M, R)
     Z = gp.Z                      # (M, 2)
@@ -664,10 +659,10 @@ def _get_groupwise_factors_expanded_K(
     strategy = getattr(model, 'neighbors', 'knn')
     L = mu.shape[0]
     N = coords.shape[0] if hasattr(coords, 'shape') else len(coords)
+    device = mu.device
 
-    # Dominant tensors per chunk: 2x (C, K_post, K_post) for Kzz/L_kzz (no L dim).
-    # Reserve 2 GB for model params, CUDA context, mu_knn/mu_t/Z_nbr overhead.
-    C = max(1, min(N, int((mem_gb - 2.0) * 1e9 / (K_post ** 2 * 4 * 2))))
+    # Adaptive chunk size: ~4 live (L, C, K_post, K_post) tensors
+    C = max(1, int(mem_gb * 1e9 / (L * K_post ** 2 * 4 * 4)))
 
     # Convert coords to tensor
     if isinstance(coords, np.ndarray):
@@ -704,9 +699,13 @@ def _get_groupwise_factors_expanded_K(
             # --- Step 1: Index into precomputed KNN (ONCE per chunk) ---
             knn_idx = knn_idx_all[start:end].to(device)  # (c, K_post)
 
-            # --- Step 2: Gather variational MEAN only (Lu not needed for mean-only posterior) ---
-            # Posterior mean = Kzx^T @ Kzz^{-1} @ mu_knn — no covariance Lu involved.
+            # --- Step 2: Gather variational params (ONCE) ---
             mu_knn = mu[:, knn_idx]                           # (L, c, K_post)
+            Lu_knn = Lu_raw[:, knn_idx]                       # (L, c, K_post, R)
+            Su_knn = Lu_knn @ Lu_knn.transpose(-2, -1)        # (L, c, K_post, K_post)
+            add_jitter(Su_knn, gp.jitter)
+            L_su = torch.linalg.cholesky(Su_knn)              # (L, c, K_post, K_post)
+            del Lu_knn, Su_knn
 
             # --- Step 3: Neighbor kernel Kzz (ONCE, fixed groups) ---
             Z_nbr = Z[knn_idx]                                # (c, K_post, 2)
@@ -719,11 +718,11 @@ def _get_groupwise_factors_expanded_K(
             L_kzz = torch.linalg.cholesky(Kzz)               # (c, K_post, K_post)
             del Kzz
 
-            # --- Step 4: Transform mu only: mu_t = L_kzz^{-1} @ mu_knn ---
-            mu_t = torch.linalg.solve_triangular(
-                L_kzz, mu_knn.unsqueeze(-1), upper=False
-            ).squeeze(-1).clone()   # (L, c, K_post) — .clone() frees the solve buffer
-            del mu_knn
+            # --- Step 4: Transform variables (ONCE) ---
+            stacked = torch.cat([mu_knn.unsqueeze(-1), L_su], dim=-1)  # (L, c, K_post, K_post+1)
+            X_sol = torch.linalg.solve_triangular(L_kzz, stacked, upper=False)
+            mu_t = X_sol[..., 0]     # (L, c, K_post)
+            del stacked, X_sol, L_su, mu_knn
 
             # --- Step 5: Per-group posterior (cheap per group) ---
             X_chunk = coords_t[start:end].unsqueeze(1)        # (c, 1, 2)
