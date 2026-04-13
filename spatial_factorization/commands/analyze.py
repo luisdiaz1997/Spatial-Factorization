@@ -626,6 +626,7 @@ def _get_groupwise_factors_batched(
 def _compute_chunk_posterior_params(knn_idx, mu, Lu_raw, Z, groupsZ, kernel, jitter, add_jitter_fn):
     """Compute Kzz cholesky and transformed mu for a chunk of KNN indices.
 
+    Includes Lu/Su for variance computation (used by original LCGP forward).
     Returns: (L_kzz, Z_nbr, gZ_nbr, mu_t) tensors for posterior computation.
     """
     mu_knn = mu[:, knn_idx]                           # (L, c, K_post)
@@ -647,6 +648,33 @@ def _compute_chunk_posterior_params(knn_idx, mu, Lu_raw, Z, groupsZ, kernel, jit
     X_sol = torch.linalg.solve_triangular(L_kzz, stacked, upper=False)
     mu_t = X_sol[..., 0]     # (L, c, K_post)
     del stacked, X_sol, L_su, mu_knn
+
+    return L_kzz, Z_nbr, gZ_nbr, mu_t
+
+
+def _compute_chunk_posterior_mean_only(knn_idx, mu, Z, groupsZ, kernel, jitter, add_jitter_fn):
+    """Compute Kzz cholesky and transformed mu for a chunk — mean only, no Lu/variance.
+
+    Faster and uses less memory than _compute_chunk_posterior_params since it skips
+    Lu indexing, Su=Lu@Lu.T, and L_su cholesky.
+
+    Returns: (L_kzz, Z_nbr, gZ_nbr, mu_t) tensors for posterior mean computation.
+    """
+    mu_knn = mu[:, knn_idx]                           # (L, c, K_post)
+
+    Z_nbr = Z[knn_idx]                                # (c, K_post, 2)
+    gZ_nbr = groupsZ[knn_idx]                         # (c, K_post)
+
+    Kzz = torch.vmap(lambda z, gz: kernel(z, z, gz, gz))(Z_nbr, gZ_nbr).contiguous()
+    add_jitter_fn(Kzz, jitter)
+    L_kzz = torch.linalg.cholesky(Kzz)               # (c, K_post, K_post)
+    del Kzz
+
+    # Solve L_kzz @ mu_t = mu_knn directly (no L_su stacking needed)
+    mu_t = torch.linalg.solve_triangular(
+        L_kzz, mu_knn.unsqueeze(-1), upper=False
+    ).squeeze(-1)  # (L, c, K_post)
+    del mu_knn
 
     return L_kzz, Z_nbr, gZ_nbr, mu_t
 
@@ -701,7 +729,6 @@ def _get_groupwise_factors_expanded_K(
     gp = model._prior
     kernel = gp.kernel
     mu = gp.mu                    # (L, M)
-    Lu_raw = gp.Lu                # (L, M, R)
     Z = gp.Z                      # (M, 2)
     groupsZ = gp.groupsZ          # (M,)
 
@@ -767,8 +794,8 @@ def _get_groupwise_factors_expanded_K(
                     print(f"  Chunk {chunk_i + 1}/{n_chunks}, Group {g + 1}/{n_groups}...",
                           end="\r", flush=True)
                     knn_idx = knn_idx_per_group[g][start:end].to(device)
-                    L_kzz, Z_nbr, gZ_nbr, mu_t = _compute_chunk_posterior_params(
-                        knn_idx, mu, Lu_raw, Z, groupsZ, kernel, gp.jitter, add_jitter
+                    L_kzz, Z_nbr, gZ_nbr, mu_t = _compute_chunk_posterior_mean_only(
+                        knn_idx, mu, Z, groupsZ, kernel, gp.jitter, add_jitter
                     )
                     result[g][start:end] = _compute_group_posterior(
                         g, L_kzz, Z_nbr, gZ_nbr, mu_t, X_chunk, kernel, device, sort_order
@@ -777,8 +804,8 @@ def _get_groupwise_factors_expanded_K(
             else:
                 # Shared KNN mode: compute Kzz/mu_t once, reuse for all groups
                 knn_idx = knn_idx_all[start:end].to(device)
-                L_kzz, Z_nbr, gZ_nbr, mu_t = _compute_chunk_posterior_params(
-                    knn_idx, mu, Lu_raw, Z, groupsZ, kernel, gp.jitter, add_jitter
+                L_kzz, Z_nbr, gZ_nbr, mu_t = _compute_chunk_posterior_mean_only(
+                    knn_idx, mu, Z, groupsZ, kernel, gp.jitter, add_jitter
                 )
                 for g in range(n_groups):
                     result[g][start:end] = _compute_group_posterior(
