@@ -13,6 +13,7 @@ Outputs saved to: outputs/{dataset}/{model}/figures/
 """
 
 import json
+import textwrap
 from pathlib import Path
 from typing import Optional, List
 
@@ -1205,9 +1206,9 @@ def plot_groupwise_factors(
     n_rows = G + 1
     n_cols = L + 1
 
-    # Shared color scale from unconditional factors
+    # Shared color scale — fixed vmax for cross-model consistency (matches factors_spatial)
     vmin = 0.0
-    vmax = float(np.percentile(factors, 99))
+    vmax = np.exp(2.3263)  # exp(99th percentile z-score) ≈ 10.24
 
     fig, axes = plt.subplots(
         n_rows, n_cols,
@@ -1237,7 +1238,7 @@ def plot_groupwise_factors(
         # Col 0: group location panel
         ax_loc = axes[g + 1, 0]
         _draw_group_loc_panel(ax_loc, coords, groups, g, s=s)
-        display_name = " ".join(group_names[g].split("_")[:2])
+        display_name = textwrap.fill(group_names[g].replace("_", " "), width=15)
         ax_loc.set_ylabel(display_name, rotation=0, fontsize=8, labelpad=50,
                           ha="right", va="center")
 
@@ -1258,6 +1259,182 @@ def plot_groupwise_factors(
 
     fig.tight_layout(pad=0.3)
     return fig
+
+
+def plot_groupwise_factors_subset(
+    factors: np.ndarray,
+    groupwise_factors: dict,
+    coords: np.ndarray,
+    groups: np.ndarray,
+    group_names: List[str],
+    group_ids: List[int],
+    factor_ids: List[int],
+    s: float = 0.5,
+    panel_size: float = 2.5,
+    cmap: str = "turbo",
+) -> plt.Figure:
+    """Grid figure of groupwise conditional posterior factor maps for a subset of groups/factors.
+
+    Layout: (len(group_ids)+1) rows × (len(factor_ids)+1) cols
+    - Row 0:    [off] [Fa uncond] [Fb uncond] ...  (selected factors only)
+    - Rows 1..: [group_loc] [Fa cond_g] [Fb cond_g] ...  (selected groups only)
+
+    Args:
+        factors:           (N, L) unconditional factor means
+        groupwise_factors: dict {g: (N, L)} conditional factor means
+        coords:            (N, 2) spatial coordinates
+        groups:            (N,) integer group codes
+        group_names:       list of G group name strings
+        group_ids:         list of group indices to include (0-based)
+        factor_ids:        list of factor indices to include (0-based)
+        s:                 scatter point size
+        panel_size:        inches per panel
+        cmap:              colormap for factor panels
+
+    Returns:
+        matplotlib Figure
+    """
+    n_rows = len(group_ids) + 1
+    n_cols = len(factor_ids) + 1
+
+    # Fixed vmax for cross-model consistency (matches factors_spatial and plot_groupwise_factors)
+    vmin = 0.0
+    vmax = np.exp(2.3263)  # exp(99th percentile z-score) ≈ 10.24
+
+    fig, axes = plt.subplots(
+        n_rows, n_cols,
+        figsize=(n_cols * panel_size, n_rows * panel_size),
+        squeeze=False,
+    )
+
+    # (0, 0): empty
+    axes[0, 0].set_visible(False)
+
+    # Row 0: unconditional factor maps for selected factors
+    for col_idx, l in enumerate(factor_ids):
+        ax = axes[0, col_idx + 1]
+        ax.scatter(
+            coords[:, 0], coords[:, 1], c=factors[:, l],
+            vmin=vmin, vmax=vmax, cmap=cmap, s=s, alpha=0.8,
+            edgecolors="none", rasterized=True,
+        )
+        ax.invert_yaxis()
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.set_facecolor("gray")
+        ax.set_title(f"Factor {l + 1}", fontsize=8)
+
+    # Rows 1..: selected groups
+    for row_idx, g in enumerate(group_ids):
+        ax_loc = axes[row_idx + 1, 0]
+        _draw_group_loc_panel(ax_loc, coords, groups, g, s=s)
+        raw_name = group_names[g] if g < len(group_names) else f"group_{g}"
+        display_name = textwrap.fill(raw_name.replace("_", " "), width=15)
+        ax_loc.set_ylabel(display_name, rotation=0, fontsize=8, labelpad=50,
+                          ha="right", va="center")
+
+        factors_g = groupwise_factors.get(g)
+        for col_idx, l in enumerate(factor_ids):
+            ax = axes[row_idx + 1, col_idx + 1]
+            if factors_g is not None:
+                ax.scatter(
+                    coords[:, 0], coords[:, 1], c=factors_g[:, l],
+                    vmin=vmin, vmax=vmax, cmap=cmap, s=s, alpha=0.8,
+                    edgecolors="none", rasterized=True,
+                )
+            ax.invert_yaxis()
+            ax.set_xticks([])
+            ax.set_yticks([])
+            ax.set_facecolor("gray")
+
+    fig.tight_layout(pad=0.3)
+    return fig
+
+
+def run_groupwise_factors(
+    config_path: str,
+    group_ids: List[int],
+    factor_ids: List[int],
+    output: str = None,
+) -> None:
+    """Load model outputs and generate a groupwise factors subset figure.
+
+    Args:
+        config_path: path to a per-model config YAML
+        group_ids:   0-based group indices to include
+        factor_ids:  0-based factor indices to include (user passes 1-based; caller converts)
+        output:      optional output path for the PNG (default: figures/ inside model dir)
+    """
+    from ..config import Config
+    from ..datasets.base import load_preprocessed
+
+    config = Config.from_yaml(config_path)
+    output_dir = Path(config.output_dir)
+    model_dir = output_dir / config.model_name
+    figures_dir = model_dir / "figures"
+    figures_dir.mkdir(exist_ok=True)
+
+    # Load preprocessed data
+    data = load_preprocessed(output_dir)
+    coords = data.X.numpy() if hasattr(data.X, "numpy") else data.X
+    groups_np = data.groups.numpy() if hasattr(data.groups, "numpy") else data.groups
+    group_names = data.group_names or []
+
+    N = coords.shape[0]
+    s = _auto_point_size(N)
+
+    # Load factors
+    factors_path = model_dir / "factors.npy"
+    if not factors_path.exists():
+        raise FileNotFoundError(f"factors.npy not found in {model_dir}. Run analyze first.")
+    factors = np.load(factors_path)  # (N, L)
+
+    # Load groupwise factors
+    groupwise_dir = model_dir / "groupwise_factors"
+    if not groupwise_dir.exists():
+        raise FileNotFoundError(
+            f"groupwise_factors/ dir not found in {model_dir}. "
+            "This command requires an MGGP model with groupwise posterior outputs."
+        )
+    groupwise_factors = {}
+    for p in sorted(groupwise_dir.glob("group_*.npy"),
+                    key=lambda x: int(x.stem.split("_")[1])):
+        g = int(p.stem.split("_")[1])
+        groupwise_factors[g] = np.load(p)
+
+    L = factors.shape[1]
+    G = len(group_names)
+
+    # Default to all groups / all factors
+    if group_ids is None:
+        group_ids = list(range(G))
+    if factor_ids is None:
+        factor_ids = list(range(L))
+
+    # Validate indices
+    bad_g = [g for g in group_ids if g < 0 or g >= G]
+    if bad_g:
+        raise ValueError(f"Group indices out of range [0, {G-1}]: {bad_g}")
+    bad_f = [f for f in factor_ids if f < 0 or f >= L]
+    if bad_f:
+        raise ValueError(f"Factor indices out of range [0, {L-1}]: {bad_f}")
+
+    fig = plot_groupwise_factors_subset(
+        factors, groupwise_factors, coords, groups_np, group_names,
+        group_ids=group_ids, factor_ids=factor_ids, s=s,
+    )
+
+    if output is None:
+        g_str = ",".join(str(g) for g in group_ids)
+        f_str = ",".join(str(f) for f in factor_ids)
+        fname = f"groupwise_factors_g{g_str}_f{f_str}.png"
+        out_path = figures_dir / fname
+    else:
+        out_path = Path(output)
+
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved: {out_path}")
 
 
 def plot_celltype_summary(

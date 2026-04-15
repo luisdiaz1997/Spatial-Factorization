@@ -120,6 +120,31 @@ def multianalyze(config, models, n_pairs, match_against, output):
     _run(config, list(models), n_pairs=n_pairs, match_against=match_against, output_path=output)
 
 
+@cli.command("groupwise_factors")
+@click.option("--config", "-c", required=True, type=click.Path(exists=True),
+              help="Path to a per-model config YAML (must be an MGGP model with groupwise posterior outputs)")
+@click.option("--groups", default=None,
+              help="Comma-separated 0-based group indices to include, e.g. '0,4,5'. Default: all groups.")
+@click.option("--factors", default=None,
+              help="Comma-separated 0-based factor indices to include, e.g. '0,2,6'. Default: all factors. Plot titles show 1-based labels (index+1).")
+@click.option("--output", "-o", default=None,
+              help="Output PNG path (default: <model_dir>/figures/groupwise_factors_g..._f....png)")
+def groupwise_factors_cmd(config, groups, factors, output):
+    """Generate a groupwise conditional factors plot for a subset of groups and factors.
+
+    \b
+    EXAMPLES:
+        spatial_factorization groupwise_factors -c configs/slideseq/mggp_lcgp.yaml --groups 0,4,5 --factors 0,2,6
+        spatial_factorization groupwise_factors -c configs/slideseq/mggp_svgp.yaml --factors 1,2
+    """
+    from .commands.figures import run_groupwise_factors
+
+    group_ids = [int(x.strip()) for x in groups.split(",")] if groups else None
+    factor_ids = [int(x.strip()) for x in factors.split(",")] if factors else None
+
+    run_groupwise_factors(config, group_ids=group_ids, factor_ids=factor_ids, output=output)
+
+
 @cli.command("benchmark")
 @click.option("--config", "-c", required=True, type=click.Path(exists=True),
               help="Path to config YAML or directory (supports same scoping as 'run all')")
