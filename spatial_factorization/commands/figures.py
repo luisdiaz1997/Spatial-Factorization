@@ -168,9 +168,9 @@ def plot_factors_spatial(
         squeeze=False
     )
 
-    # Global color scale
+    # Global color scale — use exp(z_99) for consistent cross-model comparison
     vmin = 0.0 #np.percentile(factors, 2.5)
-    vmax = np.percentile(factors, 99)
+    vmax = np.exp(2.3263)  # exp(99th percentile z-score) ≈ 10.24
 
     for i in range(L):
         row, col = divmod(i, ncols)
