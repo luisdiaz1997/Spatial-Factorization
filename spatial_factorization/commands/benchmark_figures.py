@@ -46,6 +46,13 @@ METRIC_GROUPS = {
 # Lower is better for these
 LOWER_IS_BETTER = {"CHAOS", "PAS"}
 
+# SDMBench baseline methods (canonical order: alphabetical)
+SDMBENCH_METHODS = [
+    "BASS", "BayesSpace", "CCST", "GraphST", "Leiden", "Louvain",
+    "SCAN-IT", "SEDR", "STAGATE", "SpaGCN", "SpaGCN(HE)", "SpaceFlow", "conST", "stLearn",
+]
+SDMBENCH_COLOR = "#bbbbbb"
+
 
 def _order_df(df: pd.DataFrame) -> pd.DataFrame:
     """Reorder rows to canonical model order."""
@@ -212,6 +219,155 @@ def plot_aggregate(all_dfs: Dict[str, pd.DataFrame], figures_dir: Path):
     print(f"Saved: {out_path}")
 
 
+def plot_aggregate_sdmbench(
+    all_dfs: Dict[str, pd.DataFrame],
+    figures_dir: Path,
+    baselines_df: pd.DataFrame,
+):
+    """3×3 boxplot grid: our models alongside 14 SDMBench baselines.
+
+    Row 0 — Accuracy (shared):   NMI, HOM, COM       (our models + SDMBench)
+    Row 1 — Continuity (shared): CHAOS, PAS, ASW     (our models + SDMBench)
+    Row 2 — Ours only:           ARI, Moran's I, [empty]
+    """
+    # --- build our long-form data ---
+    our_records = []
+    for dataset_name, df in all_dfs.items():
+        slide = dataset_name.split("/")[-1]
+        for model in df.index:
+            row = {"dataset": slide, "model": model}
+            for col in df.columns:
+                row[col] = df.loc[model, col]
+            our_records.append(row)
+    our_df = pd.DataFrame(our_records)
+
+    baselines = baselines_df.copy()
+    baselines["dataset"] = baselines["dataset"].astype(str)
+
+    # Which slides appear in our data (to filter baselines to the same set)
+    our_slides = set(our_df["dataset"].unique())
+
+    our_models_present = [m for m in MODEL_ORDER if m in our_df["model"].unique()]
+    # Sort SDMBench methods by median NMI (ascending: worst to best)
+    sdmbench_in_data = [m for m in SDMBENCH_METHODS if m in baselines["model"].unique()]
+    nmi_medians = {
+        m: baselines.loc[baselines["model"] == m, "NMI"].median()
+        for m in sdmbench_in_data
+    }
+    sdmbench_present = sorted(sdmbench_in_data, key=lambda m: nmi_medians[m])
+
+    metric_layout = [
+        ["NMI", "HOM", "COM"],
+        ["CHAOS", "PAS", "ASW"],
+    ]
+
+    metric_titles = {
+        "NMI": "Accuracy: NMI",
+        "HOM": "Accuracy: HOM",
+        "COM": "Accuracy: COM",
+        "CHAOS": "Continuity: CHAOS",
+        "PAS": "Continuity: PAS",
+        "ASW": "Continuity: ASW",
+    }
+
+    n_datasets = len(all_dfs)
+    nrows, ncols = 2, 3
+    # Wide enough for ~20 boxes per subplot
+    fig, axes = plt.subplots(nrows, ncols, figsize=(7 * ncols, 4.5 * nrows))
+    fig.suptitle(
+        f"Benchmark vs SDMBench Baselines (n={n_datasets} datasets)",
+        fontsize=14, fontweight="bold", y=1.01,
+    )
+
+    rng = np.random.default_rng(42)
+
+    for r, metric_row in enumerate(metric_layout):
+        for c, metric in enumerate(metric_row):
+            ax = axes[r, c]
+
+            if metric is None:
+                ax.set_visible(False)
+                continue
+
+            methods = our_models_present + sdmbench_present
+
+            box_data, box_colors, box_labels = [], [], []
+            for method in methods:
+                if method in our_models_present:
+                    vals = (
+                        our_df.loc[our_df["model"] == method, metric]
+                        .dropna().values.astype(float)
+                    )
+                    color = MODEL_COLORS.get(method, "#666666")
+                    label = MODEL_LABELS.get(method, method)
+                else:
+                    sub = baselines[
+                        (baselines["model"] == method) &
+                        (baselines["dataset"].isin(our_slides))
+                    ]
+                    vals = sub[metric].dropna().values.astype(float) if metric in sub.columns else np.array([])
+                    color = SDMBENCH_COLOR
+                    label = method
+
+                box_data.append(vals)
+                box_colors.append(color)
+                box_labels.append(label)
+
+            positions = np.arange(len(methods))
+
+            # Only plot boxes where we have data
+            valid = [i for i, v in enumerate(box_data) if len(v) > 0]
+            if not valid:
+                ax.set_visible(False)
+                continue
+
+            bp = ax.boxplot(
+                [box_data[i] for i in valid],
+                positions=positions[valid],
+                widths=0.6,
+                patch_artist=True,
+                showmeans=True,
+                meanprops=dict(marker="D", markerfacecolor="white",
+                               markeredgecolor="black", markersize=4),
+                medianprops=dict(color="black", linewidth=1.5),
+                flierprops=dict(marker="o", markerfacecolor="none",
+                                markeredgecolor="black", markersize=4),
+            )
+
+            for patch, i in zip(bp["boxes"], valid):
+                patch.set_facecolor(box_colors[i])
+                patch.set_alpha(0.7)
+
+            for i in valid:
+                jitter = rng.uniform(-0.15, 0.15, size=len(box_data[i]))
+                ax.scatter(
+                    positions[i] + jitter, box_data[i],
+                    color=box_colors[i], alpha=0.5, s=12, zorder=3,
+                    edgecolors="gray", linewidths=0.4,
+                )
+
+            # Vertical separator between our models and SDMBench
+            if our_models_present and sdmbench_present:
+                sep = len(our_models_present) - 0.5
+                ax.axvline(sep, color="black", linewidth=0.8, linestyle="--", alpha=0.4)
+
+            ax.set_xticks(positions)
+            ax.set_xticklabels(box_labels, rotation=60, ha="right", fontsize=8)
+            ax.set_title(metric_titles.get(metric, metric), fontsize=11)
+            ax.set_ylabel("Value")
+
+            if metric in LOWER_IS_BETTER:
+                ax.text(0.02, 0.98, "lower = better", transform=ax.transAxes,
+                        fontsize=7, va="top", color="gray")
+
+    plt.tight_layout()
+    figures_dir.mkdir(parents=True, exist_ok=True)
+    out_path = figures_dir / "benchmark_aggregate_sdmbench.png"
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved: {out_path}")
+
+
 def run_single(output_dir: Path, dataset_name: str = ""):
     """Generate benchmark figure for one dataset."""
     benchmark_dir = output_dir / "benchmark"
@@ -247,3 +403,11 @@ def run_from_cli(config: str, config_name: str = "general.yaml"):
         benchmarked_dirs = [od for od, _ in targets if (od / "benchmark" / "benchmark_results.csv").exists()]
         agg_figures_dir = _common_output_parent(benchmarked_dirs) / "figures"
         plot_aggregate(all_dfs, agg_figures_dir)
+
+        # SDMBench comparison plot: auto-detect baselines CSV next to figures dir
+        baselines_csv = agg_figures_dir.parent / "benchmarks" / "sdmbench_baselines.csv"
+        if baselines_csv.exists():
+            baselines_df = pd.read_csv(baselines_csv)
+            plot_aggregate_sdmbench(all_dfs, agg_figures_dir, baselines_df)
+        else:
+            print(f"  No SDMBench baselines found at {baselines_csv}, skipping comparison plot.")
