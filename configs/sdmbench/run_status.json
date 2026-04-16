@@ -1,7 +1,7 @@
 {
-  "start_time": "2026-04-03T21:37:38.361992",
-  "end_time": "2026-04-04T14:01:20.219393",
-  "elapsed_seconds": 59021.857401,
+  "start_time": "2026-04-14T19:10:54.966804",
+  "end_time": "2026-04-14T19:45:44.056347",
+  "elapsed_seconds": 2089.089543,
   "jobs": {
     "sdmbench_151507_pnmf": {
       "config_path": "configs/sdmbench/151507/pnmf.yaml",

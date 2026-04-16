@@ -1,7 +1,7 @@
 {
-  "start_time": "2026-03-24T17:49:07.830773",
-  "end_time": "2026-03-24T18:42:19.289821",
-  "elapsed_seconds": 3191.459048,
+  "start_time": "2026-04-14T21:20:02.362817",
+  "end_time": "2026-04-14T23:23:59.616172",
+  "elapsed_seconds": 7437.253355,
   "jobs": {
     "liver_test_healthy_pnmf": {
       "config_path": "configs/liver/healthy/pnmf.yaml",
@@ -540,8 +540,8 @@
     },
     "liver_healthy_AM061_mggp_svgp": {
       "config_path": "configs/liver/healthy/AM061/mggp_svgp.yaml",
-      "status": "completed",
-      "elapsed": 0.0
+      "status": "failed",
+      "error": "Analyze exit code: 1"
     },
     "liver_healthy_AM061_lcgp": {
       "config_path": "configs/liver/healthy/AM061/lcgp.yaml",

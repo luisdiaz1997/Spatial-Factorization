@@ -134,8 +134,8 @@ def plot_aggregate(all_dfs: Dict[str, pd.DataFrame], figures_dir: Path):
             records.append(row)
     long_df = pd.DataFrame(records)
 
-    # All metrics to plot (one subplot each)
-    all_metrics = ["moran_i_mean", "ARI", "NMI", "HOM", "COM", "CHAOS", "PAS", "ASW"]
+    # All metrics to plot — row 0: accuracy, row 1: spatial quality + continuity
+    all_metrics = ["ARI", "NMI", "HOM", "COM", "moran_i_mean", "CHAOS", "PAS", "ASW"]
     available_metrics = [m for m in all_metrics if m in long_df.columns]
 
     # Metric display names and category prefixes
@@ -154,7 +154,7 @@ def plot_aggregate(all_dfs: Dict[str, pd.DataFrame], figures_dir: Path):
     models_present = [m for m in MODEL_ORDER if m in long_df["model"].unique()]
     n_datasets = len(all_dfs)
 
-    ncols = 3
+    ncols = 4
     nrows = int(np.ceil(len(available_metrics) / ncols))
     fig, axes = plt.subplots(nrows, ncols, figsize=(5 * ncols, 4.5 * nrows))
     axes = np.atleast_2d(axes)
