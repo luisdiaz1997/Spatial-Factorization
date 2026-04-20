@@ -18,6 +18,16 @@ from .benchmark_analyze import _common_output_parent, _resolve_configs, _unique_
 
 MODEL_ORDER = ["pca_baseline", "pnmf", "svgp", "mggp_svgp", "lcgp", "mggp_lcgp"]
 
+# Maps benchmark model key → output subdirectory name
+MODEL_DIRNAME = {
+    "pca_baseline": "pca",
+    "pnmf": "pnmf",
+    "svgp": "svgp",
+    "mggp_svgp": "mggp_svgp",
+    "lcgp": "lcgp",
+    "mggp_lcgp": "mggp_lcgp",
+}
+
 MODEL_LABELS = {
     "pca_baseline": "PCA",
     "pnmf": "PNMF",
@@ -60,8 +70,31 @@ def _order_df(df: pd.DataFrame) -> pd.DataFrame:
     return df.loc[order]
 
 
+def _load_moran_per_factor(output_dir: Path, models: list) -> dict:
+    """Load per-factor Moran's I arrays from each model's moran_i.csv.
+
+    Returns {model: np.ndarray} for models with a readable CSV, else {model: None}.
+    """
+    result = {}
+    for model in models:
+        dirname = MODEL_DIRNAME.get(model, model)
+        csv_path = output_dir / dirname / "moran_i.csv"
+        if csv_path.exists():
+            try:
+                result[model] = pd.read_csv(csv_path)["moran_i"].values.astype(float)
+            except Exception:
+                result[model] = None
+        else:
+            result[model] = None
+    return result
+
+
 def plot_single(benchmark_dir: Path, figures_dir: Path, dataset_name: str = ""):
-    """Bar chart comparing all models for one dataset."""
+    """Bar chart comparing all models for one dataset.
+
+    Spatial Quality panel uses per-factor Moran's I box plots when available;
+    Accuracy and Continuity panels remain grouped bar charts.
+    """
     csv_path = benchmark_dir / "benchmark_results.csv"
     if not csv_path.exists():
         print(f"  No benchmark_results.csv found in {benchmark_dir}")
@@ -71,6 +104,9 @@ def plot_single(benchmark_dir: Path, figures_dir: Path, dataset_name: str = ""):
     models = df.index.tolist()
     labels = [MODEL_LABELS.get(m, m) for m in models]
     colors = [MODEL_COLORS.get(m, "#666666") for m in models]
+
+    output_dir = benchmark_dir.parent
+    moran_per_factor = _load_moran_per_factor(output_dir, models)
 
     fig, axes = plt.subplots(1, 3, figsize=(16, 5))
     title = f"Benchmark: {dataset_name}" if dataset_name else "Benchmark Results"
@@ -82,6 +118,47 @@ def plot_single(benchmark_dir: Path, figures_dir: Path, dataset_name: str = ""):
             ax.set_visible(False)
             continue
 
+        # --- Spatial Quality: box plot of per-factor Moran's I ---
+        if group_name == "Spatial Quality":
+            box_data = [moran_per_factor.get(m) for m in models]
+            has_boxes = any(v is not None for v in box_data)
+
+            if has_boxes:
+                positions = np.arange(len(models))
+                valid_idx = [i for i, v in enumerate(box_data) if v is not None]
+
+                bp = ax.boxplot(
+                    [box_data[i] for i in valid_idx],
+                    positions=positions[valid_idx],
+                    widths=0.5,
+                    patch_artist=True,
+                    showfliers=False,
+                    showmeans=True,
+                    meanprops=dict(marker="D", markerfacecolor="white",
+                                   markeredgecolor="black", markersize=5),
+                    medianprops=dict(color="black", linewidth=1.5),
+                )
+                for patch, i in zip(bp["boxes"], valid_idx):
+                    patch.set_facecolor(colors[i])
+                    patch.set_alpha(0.75)
+
+                # Overlay individual factor points
+                rng = np.random.default_rng(0)
+                for i in valid_idx:
+                    vals = box_data[i]
+                    jitter = rng.uniform(-0.15, 0.15, size=len(vals))
+                    ax.scatter(positions[i] + jitter, vals,
+                               color=colors[i], alpha=0.5, s=12, zorder=3,
+                               edgecolors="gray", linewidths=0.4)
+
+                ax.set_xticks(positions)
+                ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=9)
+                ax.set_ylabel("Moran's I")
+                ax.set_title(group_name, fontsize=11)
+                ax.set_facecolor("#f0f7ff")
+                continue  # skip the bar-chart block below
+
+        # --- Accuracy / Continuity: grouped bar chart ---
         x = np.arange(len(models))
         width = 0.8 / max(len(available), 1)
 
@@ -114,10 +191,6 @@ def plot_single(benchmark_dir: Path, figures_dir: Path, dataset_name: str = ""):
                       bbox_to_anchor=(1, 1), framealpha=0.9)
         elif len(available) == 1:
             ax.set_ylabel(available[0])
-
-        # Highlight Moran's I panel
-        if group_name == "Spatial Quality":
-            ax.set_facecolor("#f0f7ff")
 
         # Annotate lower-is-better
         lower_in_group = [m for m in available if m in LOWER_IS_BETTER]
