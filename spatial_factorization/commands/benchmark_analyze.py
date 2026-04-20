@@ -161,6 +161,7 @@ def _benchmark_pca_baseline(
     n_clusters: int,
     status_manager: StatusManager,
     job_prefix: str,
+    model_dir: Optional[Path] = None,
 ) -> Optional[dict]:
     """Compute PCA baseline and benchmark it."""
     job_name = f"{job_prefix}_pca_baseline"
@@ -169,11 +170,23 @@ def _benchmark_pca_baseline(
     try:
         pca = PCA(n_components=n_components, random_state=0)
         pca_factors = pca.fit_transform(Y)
+        if model_dir is not None:
+            model_dir.mkdir(parents=True, exist_ok=True)
+            np.save(model_dir / "factors.npy", pca_factors)
         pred = KMeans(n_clusters=n_clusters, random_state=0, n_init=10).fit_predict(pca_factors)
         np.save(benchmark_dir / "annotations" / "pca_baseline.npy", pred)
 
-        # Compute Moran's I for PCA factors
-        moran_i_mean = _compute_moran_i_mean(pca_factors, X)
+        # Compute per-component Moran's I and save CSV
+        from .analyze import _compute_moran_i
+        moran_idx, moran_sorted = _compute_moran_i(pca_factors, X)
+        # Reconstruct per-PC values in original PC order
+        moran_per_pc = np.empty(len(moran_idx))
+        moran_per_pc[moran_idx] = moran_sorted
+        moran_i_mean = float(np.mean(moran_per_pc))
+        if model_dir is not None:
+            pd.DataFrame({"factor_idx": np.arange(len(moran_per_pc)), "moran_i": moran_per_pc}).to_csv(
+                model_dir / "moran_i.csv", index=False
+            )
 
         metrics = _compute_sdmbench_metrics(sdmbench_cls, X, gt_labels, pred)
         result = {"model": "pca_baseline", "moran_i_mean": moran_i_mean, **metrics}
@@ -249,9 +262,9 @@ def run(config_path: str, model_filter: tuple = (), include_baselines: bool = Tr
 
     all_results = []
 
-    # Run models + baseline in parallel (3 workers)
+    # Run sequentially to avoid OpenBLAS segfaults from concurrent KNN on large N
     with status_manager:
-        with ThreadPoolExecutor(max_workers=3) as executor:
+        with ThreadPoolExecutor(max_workers=1) as executor:
             futures = {}
 
             for model_name, model_dir in model_dirs.items():
@@ -268,6 +281,7 @@ def run(config_path: str, model_filter: tuple = (), include_baselines: bool = Tr
                     _benchmark_pca_baseline,
                     Y, n_components, benchmark_dir, sdmbench_cls,
                     X, gt_labels, n_clusters, status_manager, job_prefix,
+                    output_dir / "pca",
                 )
                 futures[fut] = "pca_baseline"
 

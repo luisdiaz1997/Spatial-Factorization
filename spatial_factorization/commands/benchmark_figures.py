@@ -90,19 +90,28 @@ def plot_single(benchmark_dir: Path, figures_dir: Path, dataset_name: str = ""):
             offset = (i - (len(available) - 1) / 2) * width
             bars = ax.bar(x + offset, vals, width * 0.9, color=colors, alpha=0.85)
 
-            # Label each bar if multiple metrics in group
+            # Label each bar — rotated 90° so text never clips into adjacent bars
             if len(available) > 1:
                 for bar, val in zip(bars, vals):
                     if not np.isnan(val):
-                        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height(),
-                                f"{val:.2f}", ha="center", va="bottom", fontsize=6)
+                        y_pos = bar.get_height()
+                        va = "bottom" if val >= 0 else "top"
+                        ax.text(bar.get_x() + bar.get_width() / 2, y_pos,
+                                f"{val:.2f}", ha="center", va=va,
+                                fontsize=6, rotation=90)
+
+        # Expand y-axis so rotated labels don't get clipped at the top/bottom
+        ylo, yhi = ax.get_ylim()
+        pad = (yhi - ylo) * 0.18
+        ax.set_ylim(ylo - pad if ylo < 0 else ylo, yhi + pad)
 
         ax.set_xticks(x)
         ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=9)
         ax.set_title(group_name, fontsize=11)
 
         if len(available) > 1:
-            ax.legend(available, fontsize=8, loc="upper right")
+            ax.legend(available, fontsize=8, loc="upper right",
+                      bbox_to_anchor=(1, 1), framealpha=0.9)
         elif len(available) == 1:
             ax.set_ylabel(available[0])
 
@@ -368,11 +377,69 @@ def plot_aggregate_sdmbench(
     print(f"Saved: {out_path}")
 
 
+def plot_pca_factors_spatial(output_dir: Path, coords: np.ndarray) -> None:
+    """Spatial plot of PCA factors using percentile-based color scale."""
+    factors_path = output_dir / "pca" / "factors.npy"
+    if not factors_path.exists():
+        return
+
+    factors = np.load(factors_path)  # (N, L)
+    L = factors.shape[1]
+    ncols = 5
+    nrows = int(np.ceil(L / ncols))
+    figsize_per = 3.0
+
+    fig, axes = plt.subplots(
+        nrows, ncols,
+        figsize=(figsize_per * ncols + 1.0, figsize_per * nrows),
+        squeeze=False,
+    )
+
+    vmin = float(np.percentile(factors, 1))
+    vmax = float(np.percentile(factors, 99))
+
+    for i in range(L):
+        row, col = divmod(i, ncols)
+        ax = axes[row, col]
+        sc = ax.scatter(
+            coords[:, 0], coords[:, 1],
+            c=factors[:, i], vmin=vmin, vmax=vmax,
+            alpha=0.8, cmap="turbo", s=0.5,
+        )
+        ax.invert_yaxis()
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.set_facecolor("gray")
+        ax.set_title(f"PC {i+1}", fontsize=9)
+
+    for i in range(L, nrows * ncols):
+        row, col = divmod(i, ncols)
+        axes[row, col].set_visible(False)
+
+    fig.subplots_adjust(right=0.92)
+    cbar_ax = fig.add_axes([0.94, 0.15, 0.02, 0.7])
+    fig.colorbar(sc, cax=cbar_ax, label="PC value")
+
+    figures_dir = output_dir / "pca" / "figures"
+    figures_dir.mkdir(parents=True, exist_ok=True)
+    out_path = figures_dir / "factors_spatial.png"
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved: {out_path}")
+
+
 def run_single(output_dir: Path, dataset_name: str = ""):
     """Generate benchmark figure for one dataset."""
     benchmark_dir = output_dir / "benchmark"
     figures_dir = output_dir / "figures"
     plot_single(benchmark_dir, figures_dir, dataset_name=dataset_name)
+
+    # PCA spatial factors plot
+    pca_factors_path = output_dir / "pca" / "factors.npy"
+    if pca_factors_path.exists():
+        from ..datasets.base import load_preprocessed
+        coords = load_preprocessed(output_dir).X.numpy()
+        plot_pca_factors_spatial(output_dir, coords)
 
 
 def run_from_cli(config: str, config_name: str = "general.yaml"):
