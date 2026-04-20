@@ -1,9 +1,10 @@
 #!/usr/bin/env python
 """
-Speed and memory benchmark: SVGP vs LCGP(K) on the Slideseq dataset.
+Speed and memory benchmark: SVGP vs LCGP(M, K) on the Slideseq dataset.
 
-For each configuration (SVGP + LCGP at K ∈ {10, 25, 50, 75, 100}) we run
-N_STEPS training steps (after N_WARMUP warm-up steps), recording:
+For each configuration (SVGP + LCGP at M ∈ {N, 10000, 5000} and
+K ∈ {10, 25, 50, 75, 100}) we run N_STEPS training steps (after
+N_WARMUP warm-up steps), recording:
   - per-step wall-clock time (ms)
   - peak GPU memory (GB)
 
@@ -18,7 +19,6 @@ import time
 from pathlib import Path
 
 import matplotlib.pyplot as plt
-import matplotlib.ticker as ticker
 import numpy as np
 import pandas as pd
 import torch
@@ -31,19 +31,19 @@ from spatial_factorization.datasets.base import load_preprocessed
 # ── Benchmark settings ────────────────────────────────────────────────────────
 DATA_DIR      = Path("outputs/slideseq")
 OUT_DIR       = Path("outputs/benchmark_scale")
-N_WARMUP      = 10     # steps discarded before timing starts
-N_STEPS       = 50     # steps used for the per-step statistics
+N_WARMUP      = 10
+N_STEPS       = 50
 SEED          = 67
 BATCH_SIZE    = 3500
 Y_BATCH_SIZE  = 3000
 LEARNING_RATE = 2e-3
 K_VALUES      = [10, 25, 50, 75, 100]
+M_VALUES      = [None, 10000, 5000]   # None = full dataset (M=N)
 N_COMPONENTS  = 10
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 def _make_timing_callback(n_warmup, step_times):
-    """Callback that records wall-clock time for steps after n_warmup."""
     state = {"count": 0, "last_t": None}
 
     def cb(model, iteration, elbo_value):
@@ -56,21 +56,7 @@ def _make_timing_callback(n_warmup, step_times):
     return cb
 
 
-def _run_one(label, extra_kwargs, Y_np, X_np):
-    """
-    Run a single benchmark configuration.
-
-    Parameters
-    ----------
-    label       : display label
-    extra_kwargs: kwargs added on top of the common set (model-specific)
-    Y_np        : (D, N) count array
-    X_np        : (N, 2) spatial coords
-
-    Returns
-    -------
-    dict with timing and memory stats
-    """
+def _run_one(label, extra_kwargs, Y_np, X_np, batch_size, y_batch_size):
     total_steps = N_WARMUP + N_STEPS
 
     common = dict(
@@ -82,10 +68,10 @@ def _run_one(label, extra_kwargs, Y_np, X_np):
         scale_ll_D     = True,
         scale_kl_NM    = True,
         max_iter       = total_steps,
-        tol            = 1e-12,        # disable early stopping
+        tol            = 1e-12,
         verbose        = False,
-        batch_size     = BATCH_SIZE,
-        y_batch_size   = Y_BATCH_SIZE,
+        batch_size     = min(batch_size, Y_np.shape[0]),
+        y_batch_size   = min(y_batch_size, Y_np.shape[1]),
         learning_rate  = LEARNING_RATE,
         optimizer      = "Adam",
         shuffle        = True,
@@ -94,8 +80,8 @@ def _run_one(label, extra_kwargs, Y_np, X_np):
     )
     kwargs = {**common, **extra_kwargs}
 
-    print(f"\n── {label} {'─' * max(0, 50 - len(label))}")
-    print("   Building model …", flush=True)
+    print(f"\n── {label} {'─' * max(0, 55 - len(label))}")
+    print("   Building model ...", flush=True)
     model = PNMF(**kwargs)
 
     step_times = []
@@ -126,7 +112,7 @@ def _run_one(label, extra_kwargs, Y_np, X_np):
 
     mean_ms = np.mean(step_times) * 1e3
     std_ms  = np.std(step_times)  * 1e3
-    print(f"   {mean_ms:.1f} ± {std_ms:.1f} ms/step  |  peak GPU: {peak_gb:.3f} GB",
+    print(f"   {mean_ms:.1f} +/- {std_ms:.1f} ms/step  |  peak GPU: {peak_gb:.3f} GB",
           flush=True)
 
     del model
@@ -135,114 +121,135 @@ def _run_one(label, extra_kwargs, Y_np, X_np):
         torch.cuda.empty_cache()
 
     return {
-        "label":             label,
-        "sec_per_step":      float(np.mean(step_times)),
-        "sec_std":           float(np.std(step_times)),
-        "peak_memory_gb":    peak_gb,
-        "n_measured_steps":  len(step_times),
+        "label":            label,
+        "sec_per_step":     float(np.mean(step_times)),
+        "sec_std":          float(np.std(step_times)),
+        "peak_memory_gb":   peak_gb,
+        "n_measured_steps": len(step_times),
     }
 
 
 def _plot(df, out_path):
     from matplotlib.ticker import ScalarFormatter
 
-    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4.5))
 
-    ref     = df[df["label"] == "SVGP"].iloc[0]
+    ref     = df[df["model_type"] == "SVGP"].iloc[0]
     ref_ms  = ref["sec_per_step"] * 1e3
     ref_mem = ref["peak_memory_gb"]
 
-    lcgp = df[df["K"].notna()].copy().sort_values("K")
+    lcgp = df[df["model_type"] == "LCGP"].copy()
+    m_values = sorted(lcgp["M"].unique(), reverse=True)
+    colors = plt.cm.Blues(np.linspace(0.4, 0.9, len(m_values)))
 
     for ax, y_col, y_label, ref_val, title in [
-        (axes[0], "sec_per_step_ms", "ms per step",       ref_ms,  "Speed vs K"),
+        (axes[0], "sec_per_step_ms", "ms per step",          ref_ms,  "Speed vs K"),
         (axes[1], "peak_memory_gb",  "Peak GPU memory (GB)", ref_mem, "Memory vs K"),
     ]:
-        ax.plot(lcgp["K"], lcgp[y_col], marker="o", linewidth=2, label="LCGP(K)")
+        for m_val, color in zip(m_values, colors):
+            subset = lcgp[lcgp["M"] == m_val].sort_values("K")
+            ax.plot(
+                subset["K"], subset[y_col],
+                marker="o", linewidth=2, color=color,
+                label=f"LCGP M={int(m_val):,}",
+            )
+
         ax.axhline(
             ref_val,
             linestyle="--", color="black", linewidth=1.5,
             label=f"SVGP  ({ref_val:.3g})",
         )
         ax.set_xscale("log")
-        ax.set_xlabel("K (LCGP neighbors)")
+        ax.set_xlabel("K (neighbors)")
         ax.set_ylabel(y_label)
         ax.set_title(title)
-        k_ticks = lcgp["K"].astype(int).tolist()
-        ax.set_xticks(k_ticks)
+        ax.set_xticks(K_VALUES)
         ax.xaxis.set_major_formatter(ScalarFormatter())
         ax.tick_params(axis="x", rotation=0)
         ax.legend()
 
     plt.tight_layout()
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
-    print(f"\nFigure saved → {out_path}")
+    print(f"\nFigure saved -> {out_path}")
     plt.close(fig)
 
 
 def main():
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    print("Loading preprocessed Slideseq data …")
+    print("Loading preprocessed Slideseq data ...")
     data = load_preprocessed(DATA_DIR)
-    Y_np = data.Y.numpy()   # (D, N)
-    X_np = data.X.numpy()   # (N, 2)
-    print(f"  N = {data.n_spots:,}   D = {data.n_genes:,}")
+    Y_full = data.Y.numpy()   # (N, D)
+    X_full = data.X.numpy()   # (N, 2)
+    N, D = Y_full.shape
+    print(f"  N = {N:,}   D = {D:,}")
 
-    # ── Model configurations ──────────────────────────────────────────────────
-    svgp_kw = dict(
-        spatial            = True,
-        multigroup         = False,
-        local              = False,
-        kernel             = "Matern32",
-        num_inducing       = 3000,
-        lengthscale        = 8.0,
-        sigma              = 1.0,
-        train_lengthscale  = False,
-        cholesky_mode      = "exp",
-        diagonal_only      = False,
-        inducing_allocation= "proportional",
-        group_diff_param   = 1.0,
-    )
-
-    runs = [("SVGP", svgp_kw, None)]
-
-    for K in K_VALUES:
-        lcgp_kw = dict(
-            spatial            = True,
-            multigroup         = False,
-            local              = True,
-            kernel             = "Matern32",
-            K                  = K,
-            precompute_knn     = True,
-            neighbors          = "knn",
-            lengthscale        = 8.0,
-            sigma              = 1.0,
-            train_lengthscale  = False,
-            group_diff_param   = 1.0,
-        )
-        runs.append((f"LCGP K={K}", lcgp_kw, K))
-
-    # ── Run ───────────────────────────────────────────────────────────────────
     results = []
-    for label, kw, k_val in runs:
-        stats = _run_one(label, kw, Y_np, X_np)
-        stats["K"] = k_val
-        results.append(stats)
 
-    # ── Save results ──────────────────────────────────────────────────────────
+    # ── 1. SVGP (runs once, full data) ──────────────────────────────────────
+    svgp_kw = dict(
+        spatial=True, multigroup=False, local=False,
+        kernel="Matern32", num_inducing=3000,
+        lengthscale=8.0, sigma=1.0, train_lengthscale=False,
+        cholesky_mode="exp", diagonal_only=False,
+        inducing_allocation="proportional", group_diff_param=1.0,
+    )
+    stats = _run_one("SVGP", svgp_kw, Y_full, X_full, BATCH_SIZE, Y_BATCH_SIZE)
+    stats.update({"K": None, "M": N, "model_type": "SVGP"})
+    results.append(stats)
+
+    # ── 2. LCGP sweeps for each M ───────────────────────────────────────────
+    for m_target in M_VALUES:
+        if m_target is None:
+            # Full dataset
+            X_run = X_full
+            Y_run = Y_full
+            m_actual = N
+        else:
+            rng = np.random.RandomState(SEED)
+            idx = rng.choice(N, m_target, replace=False)
+            idx.sort()
+            X_run = X_full[idx]
+            Y_run = Y_full[idx]
+            m_actual = m_target
+
+        print(f"\n{'=' * 60}")
+        print(f"LCGP M={m_actual:,}  (batch_size={min(BATCH_SIZE, m_actual)})")
+        print(f"{'=' * 60}")
+
+        for K in K_VALUES:
+            lcgp_kw = dict(
+                spatial=True, multigroup=False, local=True,
+                kernel="Matern32", K=K,
+                precompute_knn=True, neighbors="knn",
+                lengthscale=8.0, sigma=1.0, train_lengthscale=False,
+                group_diff_param=1.0,
+            )
+            label = f"LCGP M={m_actual:,} K={K}"
+            stats = _run_one(label, lcgp_kw, Y_run, X_run, BATCH_SIZE, Y_BATCH_SIZE)
+            stats.update({"K": K, "M": m_actual, "model_type": "LCGP"})
+            results.append(stats)
+
+        # Free subsampled data before next M
+        if m_target is not None:
+            del X_run, Y_run
+            gc.collect()
+
+    # Free full data
+    del Y_full, X_full, data
+    gc.collect()
+
+    # ── Save results ────────────────────────────────────────────────────────
     df = pd.DataFrame(results)
     df["sec_per_step_ms"] = df["sec_per_step"] * 1e3
 
     csv_path = OUT_DIR / "results.csv"
     df.to_csv(csv_path, index=False)
-    print(f"\nResults saved → {csv_path}")
-    print(
-        df[["label", "K", "sec_per_step_ms", "peak_memory_gb", "n_measured_steps"]]
-        .to_string(index=False)
-    )
+    print(f"\nResults saved -> {csv_path}")
+    print(df[["label", "M", "K", "sec_per_step_ms", "peak_memory_gb"]]
+          .to_string(index=False))
 
-    # ── Plot ──────────────────────────────────────────────────────────────────
+    # ── Plot ────────────────────────────────────────────────────────────────
     _plot(df, OUT_DIR / "benchmark_scale.png")
 
 
