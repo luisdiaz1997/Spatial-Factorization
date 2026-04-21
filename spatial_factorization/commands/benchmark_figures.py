@@ -611,8 +611,9 @@ def run_single(output_dir: Path, dataset_name: str = ""):
 
 
 def plot_groupwise_moran_breakdown(output_dir: Path):
-    """Groupwise conditional Moran's I breakdown: per-cell-type and per-factor box plots (LCGP only)."""
+    """Groupwise conditional analysis: Moran's I box plots + factor specificity (norm ratio to marginal)."""
     model = "mggp_lcgp"
+    specificity_model = "mggp_lcgp"
     color = MODEL_COLORS[model]
 
     csv_path = output_dir / model / "groupwise_moran_i.csv"
@@ -625,12 +626,25 @@ def plot_groupwise_moran_breakdown(output_dir: Path):
     group_means = df.groupby("group_name")["moran_i"].mean().sort_values(ascending=False)
     groups = group_means.index.tolist()
     factors = sorted(df["factor_idx"].unique())
+    n_factors = len(factors)
 
-    fig, axes = plt.subplots(1, 2, figsize=(18, 7))
+    # Load conditionals and marginal for specificity analysis (use SVGP — cleaner conditionals)
+    spec_dirname = MODEL_DIRNAME.get(specificity_model, specificity_model)
+    gw_dir = output_dir / spec_dirname / "groupwise_factors"
+    gw_arrays = {}
+    if gw_dir.exists():
+        for p in sorted(gw_dir.glob("group_*.npy")):
+            g = int(p.stem.split("_")[1])
+            gw_arrays[g] = np.load(p)
+    marginal = np.load(output_dir / spec_dirname / "factors.npy") if (output_dir / spec_dirname / "factors.npy").exists() else None
+
+    fig = plt.figure(figsize=(22, 12), constrained_layout=True)
+    top_gs = fig.add_gridspec(nrows=2, height_ratios=[1, 1], hspace=0.28)
+    row1 = top_gs[0].subgridspec(1, 2, wspace=0.25)
     rng = np.random.default_rng(42)
 
-    # Per cell type
-    ax = axes[0]
+    # Panel 1: Per cell type (Moran's I)
+    ax = fig.add_subplot(row1[0])
     data_by_group = [df[df["group_name"] == g]["moran_i"].values for g in groups]
     positions = np.arange(len(groups))
     bp = ax.boxplot(data_by_group, positions=positions, widths=0.6, patch_artist=True,
@@ -646,7 +660,6 @@ def plot_groupwise_moran_breakdown(output_dir: Path):
         jitter = rng.uniform(-0.15, 0.15, size=len(vals))
         ax.scatter(positions[i] + jitter, vals, color=color,
                    alpha=0.5, s=15, zorder=3, edgecolors="gray", linewidths=0.5)
-
     ax.set_xticks(positions)
     ax.set_xticklabels(groups, rotation=60, ha="right", fontsize=9)
     ax.set_ylabel("Moran's I", fontsize=12)
@@ -658,8 +671,8 @@ def plot_groupwise_moran_breakdown(output_dir: Path):
                label=f"Marginal median = {marginal_median:.2f}")
     ax.legend(fontsize=9, loc="lower right")
 
-    # Per factor
-    ax = axes[1]
+    # Panel 2: Per factor (Moran's I)
+    ax = fig.add_subplot(row1[1])
     data_by_factor = [df[df["factor_idx"] == f]["moran_i"].values for f in factors]
     positions = np.arange(len(factors))
     bp = ax.boxplot(data_by_factor, positions=positions, widths=0.6, patch_artist=True,
@@ -675,7 +688,6 @@ def plot_groupwise_moran_breakdown(output_dir: Path):
         jitter = rng.uniform(-0.15, 0.15, size=len(vals))
         ax.scatter(positions[i] + jitter, vals, color=color,
                    alpha=0.5, s=15, zorder=3, edgecolors="gray", linewidths=0.5)
-
     ax.set_xticks(positions)
     ax.set_xticklabels([f"Factor {f+1}" for f in factors], fontsize=10)
     ax.set_ylabel("Moran's I", fontsize=12)
@@ -687,8 +699,44 @@ def plot_groupwise_moran_breakdown(output_dir: Path):
                label=f"Marginal median = {marginal_median:.2f}")
     ax.legend(fontsize=9, loc="lower right")
 
-    plt.suptitle(f"Groupwise Conditional Moran's I — {output_dir.name} ({MODEL_LABELS[model]})", fontsize=15, y=1.02)
-    plt.tight_layout()
+    # Panel 3: Specificity — ||conditional|| / ||marginal|| per factor (bottom row)
+    ax = fig.add_subplot(top_gs[1])
+    if marginal is not None and len(gw_arrays) > 1:
+        gname_to_idx = dict(zip(df["group_name"], df["group_idx"]))
+        group_order = [g for g in groups if gname_to_idx.get(g) in gw_arrays]
+        n_groups = len(group_order)
+
+        x = np.arange(n_factors)
+        width = 0.8 / n_groups
+        cmap = plt.cm.tab20
+        m_norms = np.linalg.norm(marginal, axis=0)  # (L,)
+
+        for gi, gname in enumerate(group_order):
+            gid = gname_to_idx[gname]
+            cond = gw_arrays[gid]  # (N, L)
+            c_norms = np.linalg.norm(cond, axis=0)  # (L,)
+            ratios = c_norms / (m_norms + 1e-10)
+            offset = (gi - n_groups / 2 + 0.5) * width
+            ax.bar(x + offset, ratios, width, color=cmap(gi % 20), alpha=0.8,
+                   label=gname if n_groups <= 12 else None)
+
+        ax.axhline(1.0, color="gray", linestyle=":", linewidth=1, zorder=0, label="= 1 (preserved)")
+        ax.axhline(0.0, color="gray", linestyle="-", linewidth=0.5, zorder=0)
+        ax.set_xticks(x)
+        ax.set_xticklabels([f"F{f+1}" for f in range(n_factors)], fontsize=10)
+        ax.set_ylabel("||conditional|| / ||marginal||", fontsize=12)
+        ax.set_title("Factor Specificity", fontsize=14)
+        ax.set_ylim(0, 3.5)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        if n_groups <= 12:
+            ax.legend(fontsize=6, loc="upper right", ncol=3)
+    else:
+        ax.text(0.5, 0.5, "No groupwise_factors\nor marginal found", ha="center", va="center",
+                transform=ax.transAxes, fontsize=11)
+        ax.set_title("Factor Specificity", fontsize=14)
+
+    plt.suptitle(f"Groupwise Conditional Analysis — {output_dir.name} ({MODEL_LABELS[model]})", fontsize=15, y=1.0)
     out = output_dir / "figures" / "groupwise_moran_breakdown.png"
     plt.savefig(out, dpi=150, bbox_inches="tight")
     print(f"Saved: {out}")
