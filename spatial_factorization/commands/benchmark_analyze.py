@@ -231,13 +231,15 @@ def _compute_factor_specificity(
     print(f"  Saved: {out_path}")
 
     # Shannon entropy per factor from normalized L1 ratios
+    n_groups = df["group_idx"].nunique()
     n_factors = df["factor_idx"].nunique()
     ent_records = []
     for fi in range(n_factors):
         r = df[df["factor_idx"] == fi]["l1_ratio"].values
-        p = np.abs(r) / (np.abs(r).sum() + 1e-10)
+        r_shifted = r - r.min()
+        p = r_shifted / (r_shifted.sum() + 1e-10)
         p = p[p > 0]
-        h = -np.sum(p * np.log2(p))
+        h = -np.sum(p * np.log2(p)) / np.log2(n_groups)
         ent_records.append({"factor_idx": fi, "shannon_entropy": float(h)})
     ent_df = pd.DataFrame(ent_records)
     ent_path = model_dir / "factor_entropy.csv"

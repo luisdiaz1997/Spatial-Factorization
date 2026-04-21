@@ -730,8 +730,7 @@ def plot_groupwise_moran_breakdown(output_dir: Path):
         ax.set_title("Factor Specificity", fontsize=14)
         ax.set_yscale("log", base=2)
         ax.spines["top"].set_visible(False)
-        ax.spines["right"].set_visible(False)
-        ax.legend(fontsize=6, loc="upper right", ncol=4)
+        ax.legend(fontsize=6, loc="upper left", bbox_to_anchor=(1.01, 1), ncol=1)
     else:
         ax.text(0.5, 0.5, "No groupwise_factors\nor marginal found", ha="center", va="center",
                 transform=ax.transAxes, fontsize=11)
