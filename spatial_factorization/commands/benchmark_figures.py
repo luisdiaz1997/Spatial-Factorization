@@ -70,11 +70,11 @@ def _order_df(df: pd.DataFrame) -> pd.DataFrame:
     return df.loc[order]
 
 
-def _load_moran_per_factor(output_dir: Path, models: list) -> dict:
-    """Load per-factor Moran's I arrays from each model's moran_i.csv.
+_GROUPWISE_MODELS = ["mggp_svgp", "mggp_lcgp"]
 
-    Returns {model: np.ndarray} for models with a readable CSV, else {model: None}.
-    """
+
+def _load_moran_per_factor(output_dir: Path, models: list) -> dict:
+    """Load per-factor Moran's I arrays from each model's moran_i.csv (marginal)."""
     result = {}
     for model in models:
         dirname = MODEL_DIRNAME.get(model, model)
@@ -86,6 +86,24 @@ def _load_moran_per_factor(output_dir: Path, models: list) -> dict:
                 result[model] = None
         else:
             result[model] = None
+    return result
+
+
+def _load_moran_conditional(output_dir: Path) -> dict:
+    """Load per-group per-factor Moran's I for MGGP models from groupwise_moran_i.csv.
+
+    Returns {mggp_svgp: array, mggp_lcgp: array} with values only for models
+    that have a groupwise CSV; missing models are omitted.
+    """
+    result = {}
+    for model in _GROUPWISE_MODELS:
+        dirname = MODEL_DIRNAME.get(model, model)
+        gw_path = output_dir / dirname / "groupwise_moran_i.csv"
+        if gw_path.exists():
+            try:
+                result[model] = pd.read_csv(gw_path)["moran_i"].values.astype(float)
+            except Exception:
+                pass
     return result
 
 
@@ -107,6 +125,7 @@ def plot_single(benchmark_dir: Path, figures_dir: Path, dataset_name: str = ""):
 
     output_dir = benchmark_dir.parent
     moran_per_factor = _load_moran_per_factor(output_dir, models)
+    moran_conditional = _load_moran_conditional(output_dir)
 
     fig, axes = plt.subplots(1, 3, figsize=(16, 5))
     title = f"Benchmark: {dataset_name}" if dataset_name else "Benchmark Results"
@@ -120,12 +139,23 @@ def plot_single(benchmark_dir: Path, figures_dir: Path, dataset_name: str = ""):
 
         # --- Spatial Quality: box plot of per-factor Moran's I ---
         if group_name == "Spatial Quality":
+            # Marginal boxes (one per model, 10 values each)
             box_data = [moran_per_factor.get(m) for m in models]
-            has_boxes = any(v is not None for v in box_data)
+            box_colors = list(colors)
+            box_labels = list(labels)
 
+            # Append MGGP conditional boxes (one per MGGP model, G*L values each)
+            for mggp_name in _GROUPWISE_MODELS:
+                if mggp_name in moran_conditional:
+                    box_data.append(moran_conditional[mggp_name])
+                    box_colors.append(MODEL_COLORS.get(mggp_name, "#666666"))
+                    box_labels.append(MODEL_LABELS.get(mggp_name, mggp_name) + "\nconditional")
+
+            has_boxes = any(v is not None for v in box_data)
             if has_boxes:
-                positions = np.arange(len(models))
+                positions = np.arange(len(box_data))
                 valid_idx = [i for i, v in enumerate(box_data) if v is not None]
+                n_marginal = len(models)
 
                 bp = ax.boxplot(
                     [box_data[i] for i in valid_idx],
@@ -139,20 +169,30 @@ def plot_single(benchmark_dir: Path, figures_dir: Path, dataset_name: str = ""):
                     medianprops=dict(color="black", linewidth=1.5),
                 )
                 for patch, i in zip(bp["boxes"], valid_idx):
-                    patch.set_facecolor(colors[i])
+                    patch.set_facecolor(box_colors[i])
                     patch.set_alpha(0.75)
+                    # Hatch the conditional boxes to visually distinguish them
+                    if i >= n_marginal:
+                        patch.set_hatch("///")
+                        patch.set_edgecolor("black")
 
-                # Overlay individual factor points
+                # Overlay individual points
                 rng = np.random.default_rng(0)
                 for i in valid_idx:
                     vals = box_data[i]
                     jitter = rng.uniform(-0.15, 0.15, size=len(vals))
                     ax.scatter(positions[i] + jitter, vals,
-                               color=colors[i], alpha=0.5, s=12, zorder=3,
-                               edgecolors="gray", linewidths=0.4)
+                               color=box_colors[i], alpha=0.5,
+                               s=12 if i < n_marginal else 6,
+                               zorder=3, edgecolors="gray", linewidths=0.4)
+
+                # Vertical separator between marginal and conditional boxes
+                if len(box_data) > n_marginal:
+                    ax.axvline(n_marginal - 0.5, color="black",
+                               linewidth=0.8, linestyle="--", alpha=0.4)
 
                 ax.set_xticks(positions)
-                ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=9)
+                ax.set_xticklabels(box_labels, rotation=45, ha="right", fontsize=8)
                 ax.set_ylabel("Moran's I")
                 ax.set_title(group_name, fontsize=11)
                 ax.set_facecolor("#f0f7ff")

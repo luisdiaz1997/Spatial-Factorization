@@ -61,12 +61,17 @@ class StatusManager:
             self.jobs[job.name] = job
 
     def update_job(self, name: str, **kwargs) -> None:
-        """Update job fields (status, epoch, elbo, etc.)."""
+        """Update job fields (status, epoch, elbo, etc.).
+
+        Auto-refreshes the Live display if active, so callers don't need
+        their own polling loop to see in-place updates.
+        """
         with self._lock:
             if name in self.jobs:
                 for key, value in kwargs.items():
                     if hasattr(self.jobs[name], key):
                         setattr(self.jobs[name], key, value)
+        self.refresh()
 
     def _make_table(self) -> Table:
         """Build the status table."""

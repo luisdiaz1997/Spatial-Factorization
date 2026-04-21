@@ -151,6 +151,51 @@ def _compute_moran_i_mean(factors: np.ndarray, coords: np.ndarray) -> float:
     return float(np.mean(moran_values))
 
 
+def _compute_groupwise_moran_i(
+    model_dir: Path, output_dir: Path, group_names: list
+) -> Optional[np.ndarray]:
+    """Compute per-group per-factor Moran's I from saved groupwise_factors/.
+
+    groupwise_factors/group_g.npy: (N, L) exp-space, columns in global Moran's I order.
+    Saves groupwise_moran_i.csv with columns: group_idx, group_name, factor_idx, moran_i.
+    Returns flat moran_i array (G*L values) for bulk use in box plots.
+    """
+    gf_dir = model_dir / "groupwise_factors"
+    if not gf_dir.exists():
+        return None
+
+    coords = np.load(output_dir / "preprocessed" / "X.npy")
+    from .analyze import _compute_moran_i
+
+    records = []
+    group_files = sorted(
+        gf_dir.glob("group_*.npy"), key=lambda p: int(p.stem.split("_")[1])
+    )
+    for gf_path in group_files:
+        g = int(gf_path.stem.split("_")[1])
+        group_name = group_names[g] if g < len(group_names) else str(g)
+        factors_g = np.load(gf_path)  # (N, L) exp-space
+
+        # _compute_moran_i returns sorted (idx, values); invert to get per-column values
+        moran_idx, moran_sorted = _compute_moran_i(factors_g, coords)
+        moran_per_factor = np.empty(len(moran_idx))
+        moran_per_factor[moran_idx] = moran_sorted
+
+        for factor_idx, mi in enumerate(moran_per_factor):
+            records.append({
+                "group_idx": g,
+                "group_name": group_name,
+                "factor_idx": factor_idx,
+                "moran_i": float(mi),
+            })
+
+    df = pd.DataFrame(records)
+    out_path = model_dir / "groupwise_moran_i.csv"
+    df.to_csv(out_path, index=False)
+    print(f"  Saved: {out_path}")
+    return df["moran_i"].values
+
+
 def _benchmark_pca_baseline(
     Y: np.ndarray,
     n_components: int,
@@ -289,6 +334,12 @@ def run(config_path: str, model_filter: tuple = (), include_baselines: bool = Tr
                 result = fut.result()
                 if result:
                     all_results.append(result)
+
+    # Compute groupwise Moran's I for MGGP models (uses saved groupwise_factors/)
+    for mggp_name in ["mggp_svgp", "mggp_lcgp"]:
+        if mggp_name in model_dirs:
+            print(f"  Computing groupwise Moran's I for {mggp_name}...")
+            _compute_groupwise_moran_i(model_dirs[mggp_name], output_dir, group_names)
 
     # Save combined CSV
     if all_results:
