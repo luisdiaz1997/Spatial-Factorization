@@ -606,6 +606,94 @@ def run_single(output_dir: Path, dataset_name: str = ""):
         coords = load_preprocessed(output_dir).X.numpy()
         plot_pca_factors_spatial(output_dir, coords)
 
+    # Groupwise Moran's I breakdown (LCGP only)
+    plot_groupwise_moran_breakdown(output_dir)
+
+
+def plot_groupwise_moran_breakdown(output_dir: Path):
+    """Groupwise conditional Moran's I breakdown: per-cell-type and per-factor box plots (LCGP only)."""
+    model = "mggp_lcgp"
+    color = MODEL_COLORS[model]
+
+    csv_path = output_dir / model / "groupwise_moran_i.csv"
+    if not csv_path.exists():
+        print(f"  No groupwise_moran_i.csv for {model}, skipping")
+        return
+    df = pd.read_csv(csv_path)
+    marginal_median = pd.read_csv(output_dir / model / "moran_i.csv")["moran_i"].median()
+
+    group_means = df.groupby("group_name")["moran_i"].mean().sort_values(ascending=False)
+    groups = group_means.index.tolist()
+    factors = sorted(df["factor_idx"].unique())
+
+    fig, axes = plt.subplots(1, 2, figsize=(18, 7))
+    rng = np.random.default_rng(42)
+
+    # Per cell type
+    ax = axes[0]
+    data_by_group = [df[df["group_name"] == g]["moran_i"].values for g in groups]
+    positions = np.arange(len(groups))
+    bp = ax.boxplot(data_by_group, positions=positions, widths=0.6, patch_artist=True,
+                    showmeans=True, meanprops=dict(marker="D", markerfacecolor="white",
+                                                   markeredgecolor="black", markersize=4),
+                    medianprops=dict(color="black", linewidth=1.5),
+                    flierprops=dict(marker="o", markerfacecolor="none",
+                                    markeredgecolor="black", markersize=5))
+    for patch in bp["boxes"]:
+        patch.set_facecolor(color)
+        patch.set_alpha(0.7)
+    for i, vals in enumerate(data_by_group):
+        jitter = rng.uniform(-0.15, 0.15, size=len(vals))
+        ax.scatter(positions[i] + jitter, vals, color=color,
+                   alpha=0.5, s=15, zorder=3, edgecolors="gray", linewidths=0.5)
+
+    ax.set_xticks(positions)
+    ax.set_xticklabels(groups, rotation=60, ha="right", fontsize=9)
+    ax.set_ylabel("Moran's I", fontsize=12)
+    ax.set_title("Per Cell Type", fontsize=14)
+    ax.set_ylim(0, 1.05)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.axhline(marginal_median, color="gray", linestyle=":", linewidth=1.5, zorder=0,
+               label=f"Marginal median = {marginal_median:.2f}")
+    ax.legend(fontsize=9, loc="lower right")
+
+    # Per factor
+    ax = axes[1]
+    data_by_factor = [df[df["factor_idx"] == f]["moran_i"].values for f in factors]
+    positions = np.arange(len(factors))
+    bp = ax.boxplot(data_by_factor, positions=positions, widths=0.6, patch_artist=True,
+                    showmeans=True, meanprops=dict(marker="D", markerfacecolor="white",
+                                                   markeredgecolor="black", markersize=4),
+                    medianprops=dict(color="black", linewidth=1.5),
+                    flierprops=dict(marker="o", markerfacecolor="none",
+                                    markeredgecolor="black", markersize=5))
+    for patch in bp["boxes"]:
+        patch.set_facecolor(color)
+        patch.set_alpha(0.7)
+    for i, vals in enumerate(data_by_factor):
+        jitter = rng.uniform(-0.15, 0.15, size=len(vals))
+        ax.scatter(positions[i] + jitter, vals, color=color,
+                   alpha=0.5, s=15, zorder=3, edgecolors="gray", linewidths=0.5)
+
+    ax.set_xticks(positions)
+    ax.set_xticklabels([f"Factor {f+1}" for f in factors], fontsize=10)
+    ax.set_ylabel("Moran's I", fontsize=12)
+    ax.set_title("Per Factor", fontsize=14)
+    ax.set_ylim(0, 1.05)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.axhline(marginal_median, color="gray", linestyle=":", linewidth=1.5, zorder=0,
+               label=f"Marginal median = {marginal_median:.2f}")
+    ax.legend(fontsize=9, loc="lower right")
+
+    plt.suptitle(f"Groupwise Conditional Moran's I — {output_dir.name} ({MODEL_LABELS[model]})", fontsize=15, y=1.02)
+    plt.tight_layout()
+    out = output_dir / "figures" / "groupwise_moran_breakdown.png"
+    plt.savefig(out, dpi=150, bbox_inches="tight")
+    print(f"Saved: {out}")
+    plt.close()
+
 
 def run_from_cli(config: str, config_name: str = "general.yaml"):
     """Entry point from CLI. Handles directory scoping."""
