@@ -246,12 +246,40 @@ def plot_single(benchmark_dir: Path, figures_dir: Path, dataset_name: str = ""):
     print(f"Saved: {out_path}")
 
 
-def plot_aggregate(all_dfs: Dict[str, pd.DataFrame], figures_dir: Path):
+def _load_moran_conditional_per_dataset_mean(
+    output_dirs: Dict[str, Path],
+) -> Dict[str, Dict[str, float]]:
+    """For each MGGP model, load groupwise_moran_i.csv per dataset and return
+    {model: {dataset_label: mean_moran_i}} — one scalar per dataset.
+    """
+    result: Dict[str, Dict[str, float]] = {m: {} for m in _GROUPWISE_MODELS}
+    for dataset_label, output_dir in output_dirs.items():
+        for model in _GROUPWISE_MODELS:
+            dirname = MODEL_DIRNAME.get(model, model)
+            gw_path = Path(output_dir) / dirname / "groupwise_moran_i.csv"
+            if gw_path.exists():
+                try:
+                    vals = pd.read_csv(gw_path)["moran_i"].values.astype(float)
+                    result[model][dataset_label] = float(np.mean(vals))
+                except Exception:
+                    pass
+    return result
+
+
+def plot_aggregate(
+    all_dfs: Dict[str, pd.DataFrame],
+    figures_dir: Path,
+    output_dirs: Dict[str, Path] = None,
+):
     """Boxplot grid across datasets — one subplot per metric, models on x-axis.
 
     Each box shows the distribution across datasets for that model/metric pair.
     Individual dataset values are overlaid as scatter points.
     Layout: 3 columns, as many rows as needed (mirrors SDMBench benchmark figure).
+
+    If output_dirs is provided, the Moran's I subplot also shows two extra
+    hatched boxes for MGGP conditional posteriors (per-dataset mean across
+    groups × factors).
     """
     # Stack all datasets into a long-form DataFrame
     records = []
@@ -262,6 +290,11 @@ def plot_aggregate(all_dfs: Dict[str, pd.DataFrame], figures_dir: Path):
                 row[col] = df.loc[model, col]
             records.append(row)
     long_df = pd.DataFrame(records)
+
+    # MGGP conditional per-dataset means (for extra Moran's I boxes)
+    conditional_per_dataset = (
+        _load_moran_conditional_per_dataset_mean(output_dirs) if output_dirs else {}
+    )
 
     # All metrics to plot — row 0: accuracy, row 1: spatial quality + continuity
     all_metrics = ["ARI", "NMI", "HOM", "COM", "moran_i_mean", "CHAOS", "PAS", "ASW"]
@@ -303,7 +336,18 @@ def plot_aggregate(all_dfs: Dict[str, pd.DataFrame], figures_dir: Path):
             box_colors.append(MODEL_COLORS.get(model, "#666666"))
             box_labels.append(MODEL_LABELS.get(model, model))
 
-        positions = np.arange(len(models_present))
+        # For Moran's I panel: append MGGP conditional boxes (one value per dataset,
+        # mean across groups × factors from groupwise_moran_i.csv)
+        n_marginal = len(models_present)
+        if metric == "moran_i_mean":
+            for mggp_name in _GROUPWISE_MODELS:
+                per_ds = conditional_per_dataset.get(mggp_name, {})
+                if per_ds:
+                    box_data.append(np.array(list(per_ds.values()), dtype=float))
+                    box_colors.append(MODEL_COLORS.get(mggp_name, "#666666"))
+                    box_labels.append(MODEL_LABELS.get(mggp_name, mggp_name) + "\nconditional")
+
+        positions = np.arange(len(box_data))
         bp = ax.boxplot(box_data, positions=positions, widths=0.6, patch_artist=True,
                         showmeans=True, meanprops=dict(marker="D", markerfacecolor="white",
                                                        markeredgecolor="black", markersize=4),
@@ -311,9 +355,12 @@ def plot_aggregate(all_dfs: Dict[str, pd.DataFrame], figures_dir: Path):
                         flierprops=dict(marker="o", markerfacecolor="none",
                                         markeredgecolor="black", markersize=5))
 
-        for patch, color in zip(bp["boxes"], box_colors):
+        for i, (patch, color) in enumerate(zip(bp["boxes"], box_colors)):
             patch.set_facecolor(color)
             patch.set_alpha(0.7)
+            if i >= n_marginal:
+                patch.set_hatch("///")
+                patch.set_edgecolor("black")
 
         # Overlay individual data points
         for i, vals in enumerate(box_data):
@@ -321,9 +368,14 @@ def plot_aggregate(all_dfs: Dict[str, pd.DataFrame], figures_dir: Path):
             ax.scatter(positions[i] + jitter, vals, color=box_colors[i],
                        alpha=0.5, s=15, zorder=3, edgecolors="gray", linewidths=0.5)
 
+        # Dashed separator between marginal and conditional boxes
+        if len(box_data) > n_marginal:
+            ax.axvline(n_marginal - 0.5, color="black",
+                       linewidth=0.8, linestyle="--", alpha=0.4)
+
         ax.set_xticks(positions)
         ax.set_xticklabels([f"n={n_datasets}\n{lbl}" for lbl in box_labels],
-                           rotation=45, ha="right", fontsize=9)
+                           rotation=45, ha="right", fontsize=8)
         ax.set_title(metric_titles.get(metric, metric), fontsize=11)
         ax.set_ylabel("Value")
         ax.set_xlabel("Method")
@@ -566,6 +618,7 @@ def run_from_cli(config: str, config_name: str = "general.yaml"):
 
     targets = _unique_output_dirs(config_paths)
     all_dfs = {}
+    output_dirs_by_label: Dict[str, Path] = {}
 
     for output_dir, cfg_path in targets:
         dataset_label = "/".join(output_dir.parts[1:]) if len(output_dir.parts) > 1 else str(output_dir)
@@ -577,12 +630,13 @@ def run_from_cli(config: str, config_name: str = "general.yaml"):
 
         run_single(output_dir, dataset_name=dataset_label)
         all_dfs[dataset_label] = pd.read_csv(bm_csv, index_col="model")
+        output_dirs_by_label[dataset_label] = output_dir
 
     if len(all_dfs) > 1:
         # Aggregate figure goes in common parent of all output dirs
         benchmarked_dirs = [od for od, _ in targets if (od / "benchmark" / "benchmark_results.csv").exists()]
         agg_figures_dir = _common_output_parent(benchmarked_dirs) / "figures"
-        plot_aggregate(all_dfs, agg_figures_dir)
+        plot_aggregate(all_dfs, agg_figures_dir, output_dirs=output_dirs_by_label)
 
         # SDMBench comparison plot: auto-detect baselines CSV next to figures dir
         baselines_csv = agg_figures_dir.parent / "benchmarks" / "sdmbench_baselines.csv"
