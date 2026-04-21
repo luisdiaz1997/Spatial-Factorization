@@ -196,6 +196,55 @@ def _compute_groupwise_moran_i(
     return df["moran_i"].values
 
 
+def _compute_factor_specificity(
+    model_dir: Path, output_dir: Path, group_names: list
+) -> None:
+    """Compute L1-norm specificity: ‖conditional‖₁ / ‖marginal‖₁ per group per factor.
+
+    Saves factor_specificity.csv with columns: group_idx, group_name, factor_idx, l1_ratio.
+    """
+    gf_dir = model_dir / "groupwise_factors"
+    if not gf_dir.exists():
+        return
+
+    marginal = np.load(model_dir / "factors.npy")
+    m_norms = np.linalg.norm(marginal, axis=0, ord=1)
+
+    records = []
+    for gf_path in sorted(gf_dir.glob("group_*.npy"), key=lambda p: int(p.stem.split("_")[1])):
+        g = int(gf_path.stem.split("_")[1])
+        group_name = group_names[g] if g < len(group_names) else str(g)
+        cond = np.load(gf_path)
+        c_norms = np.linalg.norm(cond, axis=0, ord=1)
+        ratios = c_norms / (m_norms + 1e-10)
+        for fi, r in enumerate(ratios):
+            records.append({
+                "group_idx": g,
+                "group_name": group_name,
+                "factor_idx": fi,
+                "l1_ratio": float(r),
+            })
+
+    df = pd.DataFrame(records)
+    out_path = model_dir / "factor_specificity.csv"
+    df.to_csv(out_path, index=False)
+    print(f"  Saved: {out_path}")
+
+    # Shannon entropy per factor from normalized L1 ratios
+    n_factors = df["factor_idx"].nunique()
+    ent_records = []
+    for fi in range(n_factors):
+        r = df[df["factor_idx"] == fi]["l1_ratio"].values
+        p = np.abs(r) / (np.abs(r).sum() + 1e-10)
+        p = p[p > 0]
+        h = -np.sum(p * np.log2(p))
+        ent_records.append({"factor_idx": fi, "shannon_entropy": float(h)})
+    ent_df = pd.DataFrame(ent_records)
+    ent_path = model_dir / "factor_entropy.csv"
+    ent_df.to_csv(ent_path, index=False)
+    print(f"  Saved: {ent_path}")
+
+
 def _benchmark_pca_baseline(
     Y: np.ndarray,
     n_components: int,
@@ -340,6 +389,7 @@ def run(config_path: str, model_filter: tuple = (), include_baselines: bool = Tr
         if mggp_name in model_dirs:
             print(f"  Computing groupwise Moran's I for {mggp_name}...")
             _compute_groupwise_moran_i(model_dirs[mggp_name], output_dir, group_names)
+            _compute_factor_specificity(model_dirs[mggp_name], output_dir, group_names)
 
     # Save combined CSV
     if all_results:

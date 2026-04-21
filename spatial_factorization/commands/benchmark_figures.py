@@ -613,7 +613,6 @@ def run_single(output_dir: Path, dataset_name: str = ""):
 def plot_groupwise_moran_breakdown(output_dir: Path):
     """Groupwise conditional analysis: Moran's I box plots + factor specificity (norm ratio to marginal)."""
     model = "mggp_lcgp"
-    specificity_model = "mggp_lcgp"
     color = MODEL_COLORS[model]
 
     csv_path = output_dir / model / "groupwise_moran_i.csv"
@@ -628,15 +627,7 @@ def plot_groupwise_moran_breakdown(output_dir: Path):
     factors = sorted(df["factor_idx"].unique())
     n_factors = len(factors)
 
-    # Load conditionals and marginal for specificity analysis (use SVGP — cleaner conditionals)
-    spec_dirname = MODEL_DIRNAME.get(specificity_model, specificity_model)
-    gw_dir = output_dir / spec_dirname / "groupwise_factors"
-    gw_arrays = {}
-    if gw_dir.exists():
-        for p in sorted(gw_dir.glob("group_*.npy")):
-            g = int(p.stem.split("_")[1])
-            gw_arrays[g] = np.load(p)
-    marginal = np.load(output_dir / spec_dirname / "factors.npy") if (output_dir / spec_dirname / "factors.npy").exists() else None
+    spec_dirname = MODEL_DIRNAME.get(model, model)
 
     fig = plt.figure(figsize=(22, 12), constrained_layout=True)
     top_gs = fig.add_gridspec(nrows=2, height_ratios=[1, 1], hspace=0.28)
@@ -699,38 +690,48 @@ def plot_groupwise_moran_breakdown(output_dir: Path):
                label=f"Marginal median = {marginal_median:.2f}")
     ax.legend(fontsize=9, loc="lower right")
 
-    # Panel 3: Specificity — ||conditional|| / ||marginal|| per factor (bottom row)
+    # Panel 3: Specificity — ‖conditional‖₁ / ‖marginal‖₁ per factor (bottom row)
     ax = fig.add_subplot(top_gs[1])
-    if marginal is not None and len(gw_arrays) > 1:
+    spec_csv = output_dir / spec_dirname / "factor_specificity.csv"
+    if spec_csv.exists():
+        spec_df = pd.read_csv(spec_csv)
         gname_to_idx = dict(zip(df["group_name"], df["group_idx"]))
-        group_order = [g for g in groups if gname_to_idx.get(g) in gw_arrays]
+        group_order = [g for g in groups if gname_to_idx.get(g) is not None]
         n_groups = len(group_order)
 
         x = np.arange(n_factors)
         width = 0.8 / n_groups
         cmap = plt.cm.tab20
-        m_norms = np.linalg.norm(marginal, axis=0)  # (L,)
 
         for gi, gname in enumerate(group_order):
             gid = gname_to_idx[gname]
-            cond = gw_arrays[gid]  # (N, L)
-            c_norms = np.linalg.norm(cond, axis=0)  # (L,)
-            ratios = c_norms / (m_norms + 1e-10)
+            ratios = spec_df[spec_df["group_idx"] == gid].sort_values("factor_idx")["l1_ratio"].values
             offset = (gi - n_groups / 2 + 0.5) * width
             ax.bar(x + offset, ratios, width, color=cmap(gi % 20), alpha=0.8,
-                   label=gname if n_groups <= 12 else None)
+                   label=gname)
+
+        # Load pre-computed Shannon entropy per factor
+        ent_csv = output_dir / spec_dirname / "factor_entropy.csv"
+        if ent_csv.exists():
+            ent_df = pd.read_csv(ent_csv)
+            entropies = dict(zip(ent_df["factor_idx"], ent_df["shannon_entropy"]))
+        else:
+            entropies = {}
+
+        for fi in range(n_factors):
+            h = entropies.get(fi, float("nan"))
+            ax.text(x[fi], 0.95, f"H={h:.2f}", ha="center", va="top", fontsize=7,
+                    transform=ax.get_xaxis_transform(), clip_on=False)
 
         ax.axhline(1.0, color="gray", linestyle=":", linewidth=1, zorder=0, label="= 1 (preserved)")
-        ax.axhline(0.0, color="gray", linestyle="-", linewidth=0.5, zorder=0)
         ax.set_xticks(x)
         ax.set_xticklabels([f"F{f+1}" for f in range(n_factors)], fontsize=10)
-        ax.set_ylabel("||conditional|| / ||marginal||", fontsize=12)
+        ax.set_ylabel("log₂(‖conditional‖₁ / ‖marginal‖₁)", fontsize=12)
         ax.set_title("Factor Specificity", fontsize=14)
-        ax.set_ylim(0, 3.5)
+        ax.set_yscale("log", base=2)
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
-        if n_groups <= 12:
-            ax.legend(fontsize=6, loc="upper right", ncol=3)
+        ax.legend(fontsize=6, loc="upper right", ncol=4)
     else:
         ax.text(0.5, 0.5, "No groupwise_factors\nor marginal found", ha="center", va="center",
                 transform=ax.transAxes, fontsize=11)
