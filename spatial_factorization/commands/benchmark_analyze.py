@@ -236,8 +236,9 @@ def _compute_factor_specificity(
     ent_records = []
     for fi in range(n_factors):
         r = df[df["factor_idx"] == fi]["l1_ratio"].values
-        r_shifted = r - r.min()
-        p = r_shifted / (r_shifted.sum() + 1e-10)
+        lr = np.log2(r)
+        lr_shifted = np.clip(lr + 1.0, 0, None)
+        p = lr_shifted / (lr_shifted.sum() + 1e-10)
         p = p[p > 0]
         h = -np.sum(p * np.log2(p)) / np.log2(n_groups)
         ent_records.append({"factor_idx": fi, "shannon_entropy": float(h)})
