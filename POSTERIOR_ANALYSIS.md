@@ -90,11 +90,6 @@ Compute uncertainty (scales/variance) on the conditionals. Which combos is the m
 
 **How:** If scales available for conditionals, plot per-cell-type uncertainty distribution.
 
-### 4. Spatial Directionality / Gradient
-For each cell-type/factor, compute principal axis of spatial trend. Tells you *which direction* the pattern runs.
-
-**How:** Fit plane to coords vs values; report gradient magnitude/direction. Or first PC of (x, y, value).
-
 ## Priority
 
-Top picks: **Specificity taxonomy** (done) and **Directionality** — visually compelling, support Results claims about "factor specificity."
+Top pick: **Specificity taxonomy** (done) — visually compelling, supports Results claims about "factor specificity."
