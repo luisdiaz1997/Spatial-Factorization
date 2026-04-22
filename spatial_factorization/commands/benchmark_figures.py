@@ -1250,6 +1250,132 @@ def plot_factor_gene_reconstructions_by_celltype(
     print(f"Saved: {out}")
 
 
+def plot_publication_panel(
+    output_dir: Path,
+    factors: dict | None = None,
+    out_name: str = "publication_panel.png",
+    fig_width: float = 22.0,
+) -> None:
+    """Compose A/B/C panel from pre-rendered PNGs.
+
+    Layout: two columns.
+      Left column:  A (benchmark) stacked above B (groupwise_moran_breakdown).
+      Right column: C as a 2x2 grid of factor panels (column-major fill, so
+                    listing dependent factors first puts both in the left
+                    column of the 2x2).
+
+    Column widths are solved so both column heights match exactly -> no
+    internal whitespace.
+
+    `factors` maps subfolder name -> list of 1-indexed factor ids:
+        {"cell-type_dependent": [10, 8], "cell-type_specific": [1], "universal": [7]}
+    """
+    import matplotlib.image as mpimg
+    from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
+
+    if factors is None:
+        factors = {
+            "cell-type_dependent": [10, 8],
+            "cell-type_specific": [1],
+            "universal": [7],
+        }
+
+    fig_dir = output_dir / "figures"
+    panel_a_path = fig_dir / "benchmark.png"
+    panel_b_path = fig_dir / "groupwise_moran_breakdown.png"
+    spec_dir = fig_dir / "groupwise_factors_specificity"
+
+    c_paths: list[Path] = []
+    c_titles: list[str] = []
+    class_labels = {
+        "cell-type_specific": "cell-type specific",
+        "cell-type_dependent": "cell-type dependent",
+        "universal": "universal",
+    }
+    for cls, ids in factors.items():
+        cls_dir = spec_dir / cls
+        for fid in ids:
+            matches = sorted(cls_dir.glob(f"factor{fid}_groups*.png"))
+            if not matches:
+                raise FileNotFoundError(
+                    f"No file factor{fid}_groups*.png in {cls_dir}"
+                )
+            c_paths.append(matches[0])
+            c_titles.append(f"F{fid} · {class_labels.get(cls, cls)}")
+
+    if len(c_paths) != 4:
+        raise ValueError(f"2x2 layout needs exactly 4 factor panels, got {len(c_paths)}")
+
+    img_a = mpimg.imread(panel_a_path)
+    img_b = mpimg.imread(panel_b_path)
+    imgs_c = [mpimg.imread(p) for p in c_paths]
+
+    ar_a = img_a.shape[1] / img_a.shape[0]
+    ar_b = img_b.shape[1] / img_b.shape[0]
+    # Average aspect of a single C panel (they should all match ~1.77).
+    ar_c_panel = float(np.mean([im.shape[1] / im.shape[0] for im in imgs_c]))
+
+    # Solve: W_left * (1/ar_a + 1/ar_b) == (W_right / 2) / ar_c_panel * 2
+    #        => left stacked height == right 2-row height
+    # With W_left + W_right = fig_width.
+    K = 1.0 / ar_a + 1.0 / ar_b        # left height per unit W_left
+    M = 1.0 / ar_c_panel                # right height per unit W_right (2 rows, each width W_right/2, height (W_right/2)/ar_c)
+    # W_left * K == W_right * M => W_left = W_right * M / K
+    w_right = fig_width / (1.0 + M / K)
+    w_left = fig_width - w_right
+    fig_height = w_right * M
+
+    w_left_frac = w_left / fig_width
+    w_right_frac = w_right / fig_width
+
+    fig = plt.figure(figsize=(fig_width, fig_height))
+    outer = GridSpec(
+        1, 2, figure=fig,
+        width_ratios=[w_left_frac, w_right_frac],
+        wspace=0.04,
+        left=0.02, right=0.995, top=0.985, bottom=0.01,
+    )
+
+    left = GridSpecFromSubplotSpec(
+        2, 1, subplot_spec=outer[0, 0],
+        height_ratios=[1.0 / ar_a, 1.0 / ar_b],
+        hspace=0.08,
+    )
+    right = GridSpecFromSubplotSpec(
+        2, 2, subplot_spec=outer[0, 1],
+        hspace=0.06, wspace=0.04,
+    )
+
+    def _label(ax, letter: str):
+        ax.text(-0.01, 1.0, letter, transform=ax.transAxes,
+                fontsize=24, fontweight="bold", va="top", ha="right")
+
+    ax_a = fig.add_subplot(left[0, 0])
+    ax_a.imshow(img_a)
+    ax_a.axis("off")
+    _label(ax_a, "A")
+
+    ax_b = fig.add_subplot(left[1, 0])
+    ax_b.imshow(img_b)
+    ax_b.axis("off")
+    _label(ax_b, "B")
+
+    for i, (img, title) in enumerate(zip(imgs_c, c_titles)):
+        # Column-major fill: first two entries go in the left column of the 2x2.
+        c, r = divmod(i, 2)
+        ax = fig.add_subplot(right[r, c])
+        ax.imshow(img)
+        ax.axis("off")
+        ax.set_title(title, fontsize=12, pad=3)
+        if i == 0:
+            _label(ax, "C")
+
+    out_path = fig_dir / out_name
+    fig.savefig(out_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved: {out_path}")
+
+
 def run_from_cli(config: str, config_name: str = "general.yaml"):
     """Entry point from CLI. Handles directory scoping."""
     config_path = Path(config)
