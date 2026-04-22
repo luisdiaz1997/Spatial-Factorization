@@ -613,13 +613,19 @@ def run_single(output_dir: Path, dataset_name: str = ""):
     # Low-entropy factor gene reconstructions (LCGP only)
     plot_low_entropy_gene_reconstructions(output_dir)
 
-    # Groupwise factors by specificity (LCGP only, low-entropy factors)
+    # Groupwise factors by specificity (LCGP only, non-universal factors)
     entropy_csv = output_dir / "mggp_lcgp" / "factor_entropy.csv"
     if entropy_csv.exists():
         df = pd.read_csv(entropy_csv)
-        low = df[df["shannon_entropy"] < 0.8].sort_values("shannon_entropy")
-        for _, row in low.iterrows():
+        # Only plot factor_specific and celltype_dependent (skip universal)
+        if "class" in df.columns:
+            interesting = df[df["class"].isin(["factor_specific", "celltype_dependent"])].sort_values("shannon_entropy")
+        else:
+            interesting = df[df["shannon_entropy"] < 0.9].sort_values("shannon_entropy")
+        for _, row in interesting.iterrows():
             fid = int(row["factor_idx"])
+            cls = row.get("class", "?")
+            print(f"  F{fid+1} ({cls}, H={row['shannon_entropy']:.2f})")
             plot_groupwise_factors_by_specificity(output_dir, factor_id=fid)
 
 

@@ -243,6 +243,30 @@ def _compute_factor_specificity(
         h = -np.sum(p * np.log2(p)) / np.log2(n_groups)
         ent_records.append({"factor_idx": fi, "shannon_entropy": float(h)})
     ent_df = pd.DataFrame(ent_records)
+
+    # Classify each factor: factor_specific | celltype_dependent | universal
+    # - factor_specific: low entropy (H<0.9), most CTs depleted, 1-2 enriched
+    # - celltype_dependent: multiple CTs enriched or strong enrichment (>1.5x),
+    #   shows new patterns not seen in marginal
+    # - universal: high entropy, all CTs ~preserved (ratio≈1)
+    class_records = []
+    for fi in range(n_factors):
+        h = ent_df[ent_df["factor_idx"] == fi]["shannon_entropy"].values[0]
+        ratios = df[df["factor_idx"] == fi]["l1_ratio"].values
+        n_enriched = int((ratios > 1.0).sum())
+        n_enriched_strong = int((ratios > 1.5).sum())
+        max_r = float(ratios.max())
+
+        mean_r = float(ratios.mean())
+        if max_r > 1.5:
+            cls = "celltype_dependent"
+        elif h < 0.9 and (n_enriched >= 1 or mean_r < 0.9):
+            cls = "factor_specific"
+        else:
+            cls = "universal"
+        class_records.append({"factor_idx": fi, "class": cls})
+
+    ent_df = ent_df.merge(pd.DataFrame(class_records), on="factor_idx")
     ent_path = model_dir / "factor_entropy.csv"
     ent_df.to_csv(ent_path, index=False)
     print(f"  Saved: {ent_path}")
