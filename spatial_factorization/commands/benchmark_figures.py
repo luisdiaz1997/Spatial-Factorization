@@ -854,7 +854,7 @@ def plot_low_entropy_gene_reconstructions(output_dir: Path,
         return
 
     N = coords.shape[0]
-    s = max(100.0 / N ** 0.5, 12.0)
+    s = 12.0 if N < 10_000 else 100.0 / N ** 0.5
     cmap = "turbo"
     vmax_factor = np.exp(2.3263)
     gene_entropy_threshold = 0.7
@@ -918,11 +918,10 @@ def plot_groupwise_factors_by_specificity(
     """For one factor, plot marginal and conditional factor maps for selected cell types.
 
     CT selection depends on `factor_class`:
-      - "factor_specific" (cell-type specific):  top-3 spike CTs only (highest l1_ratio)
-      - "celltype_dependent" (cell-type dependent):  2 CTs near ratio ~1 (closest to 1)
-                                                      + 1 most depleted CT
-      - "universal":                               3 CTs (highest l1_ratio — all similar)
-      - None / other:                              top-2 enriched + 1 depleted (legacy)
+      - "factor_specific" (cell-type specific):   top-3 spike CTs (highest l1_ratio)
+      - "celltype_dependent" (cell-type dependent): top-3 peaks (biggest first)
+      - "universal":                                3 CTs (highest l1_ratio — all similar)
+      - None / other:                               top-2 enriched + 1 depleted (legacy)
 
     Saves to `figures/groupwise_factors_specificity/<class_subfolder>/`.
     Uses same fixed vmax as figures.py (exp(2.3263)) for cross-figure consistency.
@@ -943,11 +942,8 @@ def plot_groupwise_factors_by_specificity(
                 # Spikes only — the CTs driving the factor
                 selected = factor_spec.head(3)
             elif factor_class == "celltype_dependent":
-                # 2 CTs near ratio 1 (closest to 1) + 1 most depleted
-                tmp = factor_spec.assign(_dist=(factor_spec["l1_ratio"] - 1.0).abs())
-                near_one = tmp.sort_values("_dist").head(2).drop(columns="_dist")
-                most_dep = factor_spec.sort_values("l1_ratio").head(1)
-                selected = pd.concat([near_one, most_dep]).drop_duplicates(subset=["group_idx"])
+                # Biggest peaks first — the CTs where the factor lights up
+                selected = factor_spec.head(3)
             elif factor_class == "universal":
                 # 3 CTs — all look similar anyway
                 selected = factor_spec.head(3)
@@ -999,14 +995,15 @@ def plot_groupwise_factors_by_specificity(
         groupwise_factors[g] = np.load(p)  # (N, L)
 
     N = coords.shape[0]
-    s = max(100.0 / N ** 0.5, 12.0)
+    s = 12.0 if N < 10_000 else 100.0 / N ** 0.5
     cmap = "turbo"
     # Same vmax as figures.py plot_factors_spatial for cross-figure consistency
     vmax_factor = np.exp(2.3263)
 
     n_groups = len(group_ids)
+    panel_size = 3.4
     fig, axes = plt.subplots(2, n_groups + 1,
-                             figsize=(4.2 * (n_groups + 1), 6.8),
+                             figsize=(panel_size * (n_groups + 1), panel_size * 2),
                              squeeze=False)
 
     # --- Row 0: cell type location maps ---
@@ -1017,6 +1014,7 @@ def plot_groupwise_factors_by_specificity(
         ax.scatter(coords[:, 0], coords[:, 1], c=values,
                    vmin=0, vmax=1, cmap="gray", s=s, alpha=0.9)
         ax.invert_yaxis(); ax.set_xticks([]); ax.set_yticks([])
+        ax.set_aspect("equal")
         ax.set_facecolor("gray")
         ax.set_title(gname.replace("_", " "), fontsize=9, fontweight="bold")
 
@@ -1027,6 +1025,7 @@ def plot_groupwise_factors_by_specificity(
     ax_marg.scatter(coords[:, 0], coords[:, 1], c=factors[:, f],
                     vmin=0, vmax=vmax_factor, cmap=cmap, s=s, alpha=0.8)
     ax_marg.invert_yaxis(); ax_marg.set_xticks([]); ax_marg.set_yticks([])
+    ax_marg.set_aspect("equal")
     ax_marg.set_facecolor("gray")
     ax_marg.set_title(f"F{f+1} (marginal)", fontsize=9, fontweight="bold")
 
@@ -1036,6 +1035,7 @@ def plot_groupwise_factors_by_specificity(
         ax.scatter(coords[:, 0], coords[:, 1], c=cond_f,
                    vmin=0, vmax=vmax_factor, cmap=cmap, s=s, alpha=0.8)
         ax.invert_yaxis(); ax.set_xticks([]); ax.set_yticks([])
+        ax.set_aspect("equal")
         ax.set_facecolor("gray")
         ax.set_title(f"F{f+1} (cond)", fontsize=9, fontweight="bold")
 
@@ -1149,7 +1149,7 @@ def plot_factor_gene_reconstructions_by_celltype(
         group_loadings[gid] = np.load(lp)  # (D, L)
 
     N = coords.shape[0]
-    s = max(100.0 / N ** 0.5, 12.0)
+    s = 12.0 if N < 10_000 else 100.0 / N ** 0.5
     cmap = "turbo"
     vmax_factor = np.exp(2.3263)
     gene_entropy_threshold = 0.7

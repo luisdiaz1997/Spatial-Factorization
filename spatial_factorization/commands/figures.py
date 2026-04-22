@@ -2108,9 +2108,12 @@ def plot_groupwise_factors_3d_color(
 
 
 def _auto_point_size(N: int) -> float:
-    """Scale point size as 100 / sqrt(N) so visual density stays consistent,
-    with a minimum size for sparse datasets (e.g. Visium)."""
-    return max(100.0 / np.sqrt(N), 12.0)
+    """Scale point size as 100 / sqrt(N). For sparse datasets (N < 10K,
+    e.g. Visium, osmFISH) use a fixed 12.0 — the scaling formula is too small
+    to be visible there."""
+    if N < 10_000:
+        return 12.0
+    return 100.0 / np.sqrt(N)
 
 
 def _build_colormap(n_groups: int) -> list:
