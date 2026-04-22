@@ -114,10 +114,13 @@ def find_best_match_for_factor(
 # ---------------------------------------------------------------------------
 
 def _auto_point_size(N: int) -> float:
-    """Scale point size as 100/sqrt(N) — matches figures.py. For sparse datasets
-    (N < 10K) use a fixed 12.0 since the scaling formula is too small there."""
-    if N < 10_000:
+    """Matches figures.py — 3-tier by dataset density:
+      N < 3.5K → 12.0   |  N < 15K → 3.0   |  else → 100/sqrt(N)
+    """
+    if N < 3_500:
         return 12.0
+    if N < 15_000:
+        return 3.0
     return 100.0 / np.sqrt(N)
 
 
