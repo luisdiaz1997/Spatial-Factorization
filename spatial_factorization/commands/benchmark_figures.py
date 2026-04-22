@@ -799,7 +799,7 @@ def plot_low_entropy_gene_reconstructions(output_dir: Path,
         return
 
     N = coords.shape[0]
-    s = 100.0 / N ** 0.5
+    s = max(100.0 / N ** 0.5, 12.0)
     cmap = "turbo"
     vmax_factor = np.exp(2.3263)
     gene_entropy_threshold = 0.7
@@ -927,7 +927,7 @@ def plot_groupwise_factors_by_specificity(
         groupwise_factors[g] = np.load(p)  # (N, L)
 
     N = coords.shape[0]
-    s = 100.0 / N ** 0.5
+    s = max(100.0 / N ** 0.5, 12.0)
     cmap = "turbo"
     # Same vmax as figures.py plot_factors_spatial for cross-figure consistency
     vmax_factor = np.exp(2.3263)
@@ -1070,7 +1070,7 @@ def plot_factor_gene_reconstructions_by_celltype(
         group_loadings[gid] = np.load(lp)  # (D, L)
 
     N = coords.shape[0]
-    s = 100.0 / N ** 0.5
+    s = max(100.0 / N ** 0.5, 12.0)
     cmap = "turbo"
     vmax_factor = np.exp(2.3263)
     gene_entropy_threshold = 0.7
