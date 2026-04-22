@@ -247,6 +247,30 @@ def _compute_factor_specificity(
     ent_df.to_csv(ent_path, index=False)
     print(f"  Saved: {ent_path}")
 
+    # Per-gene factor entropy (B2 direction): each gene's loading distribution across factors
+    loadings_path = model_dir / "loadings.npy"
+    meta_path = output_dir / "preprocessed" / "metadata.json"
+    if loadings_path.exists() and meta_path.exists():
+        import json
+        loadings = np.load(loadings_path)  # (D, L)
+        gene_names = json.load(open(meta_path))["gene_names"]
+        D, L = loadings.shape
+
+        eps = 1e-10
+        W_pos = np.maximum(loadings, eps)
+        p = W_pos / W_pos.sum(axis=1, keepdims=True)
+        log_p = np.log2(np.clip(p, 1e-30, None))
+        H = -(p * log_p).sum(axis=1) / np.log2(L)
+
+        gene_ent_df = pd.DataFrame({
+            "gene_idx": range(D),
+            "gene_name": gene_names,
+            "shannon_entropy": H,
+        })
+        gene_ent_path = model_dir / "gene_factor_entropy.csv"
+        gene_ent_df.to_csv(gene_ent_path, index=False)
+        print(f"  Saved: {gene_ent_path}")
+
 
 def _benchmark_pca_baseline(
     Y: np.ndarray,

@@ -12,6 +12,7 @@ from typing import Dict
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import textwrap
 
 from ..config import Config
 from .benchmark_analyze import _common_output_parent, _resolve_configs, _unique_output_dirs
@@ -609,6 +610,10 @@ def run_single(output_dir: Path, dataset_name: str = ""):
     # Groupwise Moran's I breakdown (LCGP only)
     plot_groupwise_moran_breakdown(output_dir)
 
+    # Low-entropy factor gene reconstructions (LCGP only)
+    plot_low_entropy_gene_reconstructions(output_dir)
+
+
 
 def plot_groupwise_moran_breakdown(output_dir: Path):
     """Groupwise conditional analysis: Moran's I box plots + factor specificity (norm ratio to marginal)."""
@@ -741,6 +746,289 @@ def plot_groupwise_moran_breakdown(output_dir: Path):
     plt.savefig(out, dpi=150, bbox_inches="tight")
     print(f"Saved: {out}")
     plt.close()
+
+
+def plot_low_entropy_gene_reconstructions(output_dir: Path,
+                                          entropy_threshold: float = 0.8,
+                                          n_genes: int = 3):
+    """For each low-entropy (cell-type-specific) factor, plot the factor map and
+    observed expression of the top-n genes (by loading) side by side.
+
+    Reads from mggp_lcgp model directory; saves to output_dir/figures/.
+    """
+    import json
+    from scipy import sparse
+    model = "mggp_lcgp"
+    model_dir = output_dir / model
+    preprocessed_dir = output_dir / "preprocessed"
+
+    entropy_csv = model_dir / "factor_entropy.csv"
+    if not entropy_csv.exists():
+        print(f"  No factor_entropy.csv for {model}, skipping low-entropy gene reconstructions")
+        return
+
+    factors_path  = model_dir / "factors.npy"
+    loadings_path = model_dir / "loadings.npy"
+    coords_path   = preprocessed_dir / "X.npy"
+    y_path        = preprocessed_dir / "Y.npz"
+    meta_path     = preprocessed_dir / "metadata.json"
+
+    if not all(p.exists() for p in [factors_path, loadings_path, coords_path, y_path, meta_path]):
+        print("  Missing factors/loadings/coords/Y/metadata, skipping")
+        return
+
+    factors    = np.load(factors_path)            # (N, L)
+    loadings   = np.load(loadings_path)           # (D, L)
+    coords     = np.load(coords_path)             # (N, 2)
+    Y          = sparse.load_npz(y_path)          # (D, N) sparse
+    gene_names = json.load(open(meta_path))["gene_names"]
+    entropy_df = pd.read_csv(entropy_csv)
+
+    low = entropy_df[entropy_df["shannon_entropy"] < entropy_threshold].sort_values("shannon_entropy")
+    if len(low) == 0:
+        print(f"  No factors with H < {entropy_threshold}, skipping")
+        return
+
+    N = coords.shape[0]
+    s = 100.0 / N ** 0.5
+    cmap = "turbo"
+    vmax_factor = np.exp(2.3263)
+    gene_entropy_threshold = 0.7
+
+    # Load pre-computed per-gene factor entropy
+    gene_H = pd.read_csv(model_dir / "gene_factor_entropy.csv")["shannon_entropy"].values
+    specific_mask = gene_H < gene_entropy_threshold
+
+    n_rows = len(low)
+    n_cols = 1 + n_genes
+    fig, axes = plt.subplots(n_rows, n_cols,
+                             figsize=(3.2 * n_cols, 3.0 * n_rows),
+                             squeeze=False)
+
+    for row_i, (_, row) in enumerate(low.iterrows()):
+        f = int(row["factor_idx"])
+        H = row["shannon_entropy"]
+        fvec = factors[:, f]
+
+        ax = axes[row_i, 0]
+        ax.scatter(coords[:, 0], coords[:, 1], c=fvec,
+                   vmin=0, vmax=vmax_factor, cmap=cmap, s=s, alpha=0.8)
+        ax.invert_yaxis()
+        ax.set_xticks([]); ax.set_yticks([])
+        ax.set_facecolor("gray")
+        ax.set_title(f"F{f + 1}  H={H:.2f}", fontsize=9, fontweight="bold")
+        ax.set_ylabel("factor", fontsize=7)
+
+        # Top genes: filter to factor-specific (low gene-H), then sort by raw loading
+        candidates = np.where(specific_mask)[0]
+        top_genes = candidates[np.argsort(loadings[candidates, f])[::-1][:n_genes]]
+        for col_i, d in enumerate(top_genes):
+            expr = np.array(Y[:, d].todense()).ravel()   # (N,) observed counts for gene d
+            vmax_g = np.percentile(expr, 99)
+            ax = axes[row_i, col_i + 1]
+            ax.scatter(coords[:, 0], coords[:, 1], c=expr,
+                       vmin=0, vmax=max(vmax_g, 1e-9), cmap=cmap, s=s, alpha=0.8)
+            ax.invert_yaxis()
+            ax.set_xticks([]); ax.set_yticks([])
+            ax.set_facecolor("gray")
+            gname = gene_names[d] if d < len(gene_names) else f"gene_{d}"
+            ax.set_title(f"{gname}\nW={loadings[d,f]:.3f}\nH_g={gene_H[d]:.2f}", fontsize=9)
+
+    fig.suptitle(f"Low-Entropy Factor Gene Reconstructions — {output_dir.name} (MGGP-LCGP)",
+                 fontsize=11, y=1.01)
+    fig.tight_layout()
+
+    (output_dir / "figures").mkdir(parents=True, exist_ok=True)
+    out = output_dir / "figures" / "low_entropy_gene_reconstructions.png"
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved: {out}")
+
+
+def plot_factor_gene_reconstructions_by_celltype(
+    output_dir: Path,
+    factor_id: int,
+    group_ids: List[int] = None,
+    n_genes: int = 3,
+) -> None:
+    """For one factor and selected cell types, plot conditional factor maps,
+    observed expression of top genes, and cell-type-conditional reconstructions.
+
+    Gene × Cell-Type grid layout with margins:
+      Row 0:        cell type location maps
+      Row 1:        conditional factor maps per cell type
+      Col 0:        observed gene expression (per row)
+      Inner n×n:    reconstructions Wg[d,f] × cond_f for each (gene, cell-type)
+
+    If group_ids is None, auto-selects from factor_specificity.csv:
+      top-2 enriched (l1_ratio > 1) + 1 depleted (lowest l1_ratio).
+
+    Reconstruction for gene d in group g: loadings_group_g[d, f] * groupwise_factors_g[:, f]
+    """
+    import json
+    from scipy import sparse as sp_sparse
+
+    model = "mggp_lcgp"
+    model_dir = output_dir / model
+    preprocessed_dir = output_dir / "preprocessed"
+
+    # Auto-select groups from factor specificity if not provided
+    if group_ids is None:
+        spec_path = model_dir / "factor_specificity.csv"
+        if spec_path.exists():
+            spec_df = pd.read_csv(spec_path)
+            factor_spec = spec_df[spec_df["factor_idx"] == factor_id].sort_values("l1_ratio", ascending=False)
+            enriched = factor_spec[factor_spec["l1_ratio"] > 1.0].head(2)
+            depleted = factor_spec[factor_spec["l1_ratio"] < 1.0].tail(1)
+            selected = pd.concat([enriched, depleted])
+            group_ids = selected["group_idx"].astype(int).tolist()
+            pairs = [(g, selected.loc[selected["group_idx"]==g, "group_name"].values[0],
+                      round(selected.loc[selected["group_idx"]==g, "l1_ratio"].values[0], 2))
+                     for g in group_ids]
+            print(f"  Auto-selected groups for F{factor_id+1}: {pairs}")
+        else:
+            group_ids = [0, 1, 2]
+
+    # Required files
+    paths = dict(
+        factors=model_dir / "factors.npy",
+        loadings=model_dir / "loadings.npy",
+        coords=preprocessed_dir / "X.npy",
+        y=preprocessed_dir / "Y.npz",
+        meta=preprocessed_dir / "metadata.json",
+        groups=preprocessed_dir / "C.npy",
+    )
+    if not all(p.exists() for p in paths.values()):
+        missing = [k for k, p in paths.items() if not p.exists()]
+        print(f"  Missing {missing}, skipping factor-gene-celltype figure")
+        return
+
+    factors   = np.load(paths["factors"])            # (N, L)
+    loadings  = np.load(paths["loadings"])           # (D, L)
+    coords    = np.load(paths["coords"])             # (N, 2)
+    Y         = sp_sparse.load_npz(paths["y"])       # (N, D) sparse
+    groups_np = np.load(paths["groups"])             # (N,)
+    gene_names = json.load(open(paths["meta"]))["gene_names"]
+    meta_full = json.load(open(paths["meta"]))
+    group_names = meta_full.get("group_names", [])
+
+    f = factor_id
+    L = factors.shape[1]
+    if f < 0 or f >= L:
+        print(f"  factor_id {f} out of range [0, {L-1}], skipping")
+        return
+
+    # Load groupwise conditional factors
+    gw_dir = model_dir / "groupwise_factors"
+    if not gw_dir.exists():
+        print(f"  No groupwise_factors dir, skipping")
+        return
+    groupwise_factors = {}
+    for p in sorted(gw_dir.glob("group_*.npy"), key=lambda x: int(x.stem.split("_")[1])):
+        g = int(p.stem.split("_")[1])
+        groupwise_factors[g] = np.load(p)  # (N, L)
+
+    # Load per-group loadings
+    group_loadings = {}
+    for lp in model_dir.glob("loadings_group_*.npy"):
+        gid = int(lp.stem.split("_")[-1])
+        group_loadings[gid] = np.load(lp)  # (D, L)
+
+    N = coords.shape[0]
+    s = 100.0 / N ** 0.5
+    cmap = "turbo"
+    vmax_factor = np.exp(2.3263)
+    gene_entropy_threshold = 0.7
+
+    # Load pre-computed per-gene factor entropy
+    gene_H = pd.read_csv(model_dir / "gene_factor_entropy.csv")["shannon_entropy"].values
+    specific_mask = gene_H < gene_entropy_threshold
+
+    # Top genes: filter to factor-specific (low gene-H), then sort by raw loading
+    candidates = np.where(specific_mask)[0]
+    top_genes = candidates[np.argsort(loadings[candidates, f])[::-1][:n_genes]]
+
+    # Grid with margins: (n_genes+2) rows × (n_groups+1) cols
+    # Row 0 = CT locations, Row 1 = factor maps, Col 0 = observed genes, inner = recons
+    n_groups = len(group_ids)
+    fig, axes = plt.subplots(n_genes + 2, n_groups + 1,
+                             figsize=(4.2 * (n_groups + 1), 3.4 * (n_genes + 2)),
+                             squeeze=False)
+
+    # --- Row 0: cell type location maps ---
+    for ci, g in enumerate(group_ids):
+        gname = group_names[g] if g < len(group_names) else f"group_{g}"
+        values = np.where(groups_np == g, 1.0, 0.0)
+        ax = axes[0, ci + 1]
+        ax.scatter(coords[:, 0], coords[:, 1], c=values,
+                   vmin=0, vmax=1, cmap="gray", s=s, alpha=0.9)
+        ax.invert_yaxis(); ax.set_xticks([]); ax.set_yticks([])
+        ax.set_facecolor("gray")
+        ax.set_title(gname.replace("_", " "), fontsize=9, fontweight="bold")
+
+    # Hide top-left corner
+    axes[0, 0].set_visible(False)
+
+    # --- Row 1: conditional factor maps per cell type ---
+    for ci, g in enumerate(group_ids):
+        cond_f = groupwise_factors.get(g, factors)[:, f]
+        ax = axes[1, ci + 1]
+        ax.scatter(coords[:, 0], coords[:, 1], c=cond_f,
+                   vmin=0, vmax=vmax_factor, cmap=cmap, s=s, alpha=0.8)
+        ax.invert_yaxis(); ax.set_xticks([]); ax.set_yticks([])
+        ax.set_facecolor("gray")
+        ax.set_title(f"F{f+1} (cond)", fontsize=9, fontweight="bold")
+
+    # Left of conditionals: marginal factor map
+    ax_marg = axes[1, 0]
+    ax_marg.scatter(coords[:, 0], coords[:, 1], c=factors[:, f],
+                    vmin=0, vmax=vmax_factor, cmap=cmap, s=s, alpha=0.8)
+    ax_marg.invert_yaxis(); ax_marg.set_xticks([]); ax_marg.set_yticks([])
+    ax_marg.set_facecolor("gray")
+    ax_marg.set_title(f"F{f+1} (marginal)", fontsize=9, fontweight="bold")
+
+    # --- Gene rows: col 0 = observed, cols 1+ = reconstructions ---
+    for gi, d in enumerate(top_genes):
+        gn = gene_names[d] if d < len(gene_names) else f"gene_{d}"
+        expr = np.array(Y[:, d].todense()).ravel()
+        vmax_g = np.percentile(expr, 99)
+        r = gi + 2
+
+        # Left column: observed gene expression
+        ax_obs = axes[r, 0]
+        ax_obs.scatter(coords[:, 0], coords[:, 1], c=expr,
+                       vmin=0, vmax=max(vmax_g, 1e-9), cmap=cmap, s=s, alpha=0.8)
+        ax_obs.invert_yaxis(); ax_obs.set_xticks([]); ax_obs.set_yticks([])
+        ax_obs.set_facecolor("gray")
+        ax_obs.set_ylabel(f"{gn}\nW={loadings[d,f]:.3f}\nH_g={gene_H[d]:.2f}",
+                          rotation=0, fontsize=7, labelpad=55, ha="right", va="center")
+        if gi == 0:
+            ax_obs.set_title("observed", fontsize=7)
+
+        # Reconstruction columns
+        for ci, g in enumerate(group_ids):
+            cond_f = groupwise_factors.get(g, factors)[:, f]
+            Wg = group_loadings.get(g, loadings)
+            recon = Wg[d, f] * cond_f
+            vmax_r = np.percentile(recon, 99)
+
+            ax = axes[r, ci + 1]
+            ax.scatter(coords[:, 0], coords[:, 1], c=recon,
+                       vmin=0, vmax=max(vmax_r, 1e-9), cmap=cmap, s=s, alpha=0.8)
+            ax.invert_yaxis(); ax.set_xticks([]); ax.set_yticks([])
+            ax.set_facecolor("gray")
+
+    fig.suptitle(f"F{f+1} Gene Reconstructions by Cell Type — {output_dir.name}",
+                 fontsize=11, y=1.01)
+    fig.tight_layout()
+
+    fig_dir = output_dir / "figures" / "gene_reconstructions"
+    fig_dir.mkdir(parents=True, exist_ok=True)
+    g_str = ",".join(str(g) for g in group_ids)
+    out = fig_dir / f"factor{f+1}_groups{g_str}.png"
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved: {out}")
 
 
 def run_from_cli(config: str, config_name: str = "general.yaml"):
