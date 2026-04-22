@@ -1025,7 +1025,7 @@ def plot_groupwise_factors_by_specificity(
         ax.invert_yaxis(); ax.set_xticks([]); ax.set_yticks([])
         ax.set_aspect("equal")
         ax.set_facecolor("gray")
-        ax.set_title(gname.replace("_", " "), fontsize=9, fontweight="bold")
+        ax.set_title(textwrap.fill(gname.replace("_", " "), width=18), fontsize=9, fontweight="bold")
 
     axes[0, 0].set_visible(False)
 
@@ -1036,7 +1036,6 @@ def plot_groupwise_factors_by_specificity(
     ax_marg.invert_yaxis(); ax_marg.set_xticks([]); ax_marg.set_yticks([])
     ax_marg.set_aspect("equal")
     ax_marg.set_facecolor("gray")
-    ax_marg.set_title(f"F{f+1} (marginal)", fontsize=9, fontweight="bold")
 
     for ci, g in enumerate(group_ids):
         cond_f = groupwise_factors.get(g, factors)[:, f]
@@ -1046,7 +1045,6 @@ def plot_groupwise_factors_by_specificity(
         ax.invert_yaxis(); ax.set_xticks([]); ax.set_yticks([])
         ax.set_aspect("equal")
         ax.set_facecolor("gray")
-        ax.set_title(f"F{f+1} (cond)", fontsize=9, fontweight="bold")
 
     fig_dir = output_dir / "figures" / "groupwise_factors_specificity"
     subfolder_map = {
@@ -1183,7 +1181,7 @@ def plot_factor_gene_reconstructions_by_celltype(
                    vmin=0, vmax=1, cmap="gray", s=s, alpha=0.9)
         ax.invert_yaxis(); ax.set_xticks([]); ax.set_yticks([])
         ax.set_facecolor("gray")
-        ax.set_title(gname.replace("_", " "), fontsize=9, fontweight="bold")
+        ax.set_title(textwrap.fill(gname.replace("_", " "), width=18), fontsize=9, fontweight="bold")
 
     # Hide top-left corner
     axes[0, 0].set_visible(False)
@@ -1250,6 +1248,51 @@ def plot_factor_gene_reconstructions_by_celltype(
     print(f"Saved: {out}")
 
 
+def _auto_pick_panel_factors(entropy_csv: Path) -> dict:
+    """Pick 4 factors for the publication panel from factor_entropy.csv.
+
+    Strategy: ensure at least one of each available class (1 dep + 1 spec +
+    1 uni), then fill remaining slots by priority (dep > spec > uni). Within
+    a class, lowest entropy first for specific/dependent (cleanest signal);
+    highest entropy first for universal (most uniform). Returns 1-indexed
+    factor ids keyed by subfolder name.
+    """
+    df = pd.read_csv(entropy_csv)
+
+    def _sorted(cls: str, ascending: bool) -> list:
+        s = df[df["class"] == cls].sort_values("shannon_entropy", ascending=ascending)
+        return s["factor_idx"].astype(int).tolist()
+
+    dep = _sorted("celltype_dependent", ascending=True)
+    spec = _sorted("factor_specific", ascending=True)
+    uni = _sorted("universal", ascending=False)
+
+    picks = {"cell-type_dependent": [], "cell-type_specific": [], "universal": []}
+    remaining = 4
+
+    # Seed one from each available class first so all classes are represented.
+    for pool, key in ((dep, "cell-type_dependent"),
+                      (spec, "cell-type_specific"),
+                      (uni, "universal")):
+        if pool and remaining > 0:
+            picks[key].append(pool.pop(0))
+            remaining -= 1
+
+    # Fill the rest by priority: dep > spec > uni.
+    while remaining > 0:
+        if dep:
+            picks["cell-type_dependent"].append(dep.pop(0))
+        elif spec:
+            picks["cell-type_specific"].append(spec.pop(0))
+        elif uni:
+            picks["universal"].append(uni.pop(0))
+        else:
+            break
+        remaining -= 1
+
+    return {k: [f + 1 for f in v] for k, v in picks.items() if v}
+
+
 def plot_publication_panel(
     output_dir: Path,
     factors: dict | None = None,
@@ -1279,11 +1322,13 @@ def plot_publication_panel(
     from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
 
     if factors is None:
-        factors = {
-            "cell-type_dependent": [10, 8],
-            "cell-type_specific": [1],
-            "universal": [7],
-        }
+        entropy_csv = output_dir / "mggp_lcgp" / "factor_entropy.csv"
+        if not entropy_csv.exists():
+            raise FileNotFoundError(
+                f"No factor_entropy.csv at {entropy_csv}; pass `factors` explicitly."
+            )
+        factors = _auto_pick_panel_factors(entropy_csv)
+        print(f"  Auto-picked factors: {factors}")
 
     fig_dir = output_dir / "figures"
     panel_a_path = fig_dir / "benchmark_vertical.png"
