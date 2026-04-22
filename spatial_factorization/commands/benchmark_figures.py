@@ -613,6 +613,15 @@ def run_single(output_dir: Path, dataset_name: str = ""):
     # Low-entropy factor gene reconstructions (LCGP only)
     plot_low_entropy_gene_reconstructions(output_dir)
 
+    # Groupwise factors by specificity (LCGP only, low-entropy factors)
+    entropy_csv = output_dir / "mggp_lcgp" / "factor_entropy.csv"
+    if entropy_csv.exists():
+        df = pd.read_csv(entropy_csv)
+        low = df[df["shannon_entropy"] < 0.8].sort_values("shannon_entropy")
+        for _, row in low.iterrows():
+            fid = int(row["factor_idx"])
+            plot_groupwise_factors_by_specificity(output_dir, factor_id=fid)
+
 
 
 def plot_groupwise_moran_breakdown(output_dir: Path):
@@ -840,6 +849,132 @@ def plot_low_entropy_gene_reconstructions(output_dir: Path,
 
     (output_dir / "figures").mkdir(parents=True, exist_ok=True)
     out = output_dir / "figures" / "low_entropy_gene_reconstructions.png"
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved: {out}")
+
+
+def plot_groupwise_factors_by_specificity(
+    output_dir: Path,
+    factor_id: int,
+    group_ids: List[int] = None,
+) -> None:
+    """For one low-entropy factor, plot marginal and conditional factor maps for
+    the most specific cell types (enriched + depleted).
+
+    Layout (2 rows):
+      Row 0:        cell type location maps
+      Row 1:        [marginal F] [cond F(CT1)] [cond F(CT2)] ...
+
+    Uses the same fixed vmax as figures.py (exp(2.3263)) for cross-figure consistency.
+    If group_ids is None, auto-selects from factor_specificity.csv:
+      top-2 enriched (l1_ratio > 1) + 1 depleted (lowest l1_ratio).
+    """
+    import json
+    model = "mggp_lcgp"
+    model_dir = output_dir / model
+    preprocessed_dir = output_dir / "preprocessed"
+
+    # Auto-select groups from factor specificity if not provided
+    if group_ids is None:
+        spec_path = model_dir / "factor_specificity.csv"
+        if spec_path.exists():
+            spec_df = pd.read_csv(spec_path)
+            factor_spec = spec_df[spec_df["factor_idx"] == factor_id].sort_values("l1_ratio", ascending=False)
+            enriched = factor_spec[factor_spec["l1_ratio"] > 1.0].head(2)
+            depleted = factor_spec[factor_spec["l1_ratio"] < 1.0].tail(1)
+            selected = pd.concat([enriched, depleted])
+            group_ids = selected["group_idx"].astype(int).tolist()
+            pairs = [(g, selected.loc[selected["group_idx"]==g, "group_name"].values[0],
+                      round(selected.loc[selected["group_idx"]==g, "l1_ratio"].values[0], 2))
+                     for g in group_ids]
+            print(f"  Auto-selected groups for F{factor_id+1}: {pairs}")
+        else:
+            group_ids = [0, 1, 2]
+
+    # Required files
+    paths = dict(
+        factors=model_dir / "factors.npy",
+        coords=preprocessed_dir / "X.npy",
+        meta=preprocessed_dir / "metadata.json",
+        groups=preprocessed_dir / "C.npy",
+    )
+    if not all(p.exists() for p in paths.values()):
+        missing = [k for k, p in paths.items() if not p.exists()]
+        print(f"  Missing {missing}, skipping factor-celltype figure")
+        return
+
+    factors   = np.load(paths["factors"])            # (N, L)
+    coords    = np.load(paths["coords"])             # (N, 2)
+    groups_np = np.load(paths["groups"])             # (N,)
+    meta_full = json.load(open(paths["meta"]))
+    group_names = meta_full.get("group_names", [])
+
+    f = factor_id
+    L = factors.shape[1]
+    if f < 0 or f >= L:
+        print(f"  factor_id {f} out of range [0, {L-1}], skipping")
+        return
+
+    # Load groupwise conditional factors
+    gw_dir = model_dir / "groupwise_factors"
+    if not gw_dir.exists():
+        print(f"  No groupwise_factors dir, skipping")
+        return
+    groupwise_factors = {}
+    for p in sorted(gw_dir.glob("group_*.npy"), key=lambda x: int(x.stem.split("_")[1])):
+        g = int(p.stem.split("_")[1])
+        groupwise_factors[g] = np.load(p)  # (N, L)
+
+    N = coords.shape[0]
+    s = 100.0 / N ** 0.5
+    cmap = "turbo"
+    # Same vmax as figures.py plot_factors_spatial for cross-figure consistency
+    vmax_factor = np.exp(2.3263)
+
+    n_groups = len(group_ids)
+    fig, axes = plt.subplots(2, n_groups + 1,
+                             figsize=(4.2 * (n_groups + 1), 6.8),
+                             squeeze=False)
+
+    # --- Row 0: cell type location maps ---
+    for ci, g in enumerate(group_ids):
+        gname = group_names[g] if g < len(group_names) else f"group_{g}"
+        values = np.where(groups_np == g, 1.0, 0.0)
+        ax = axes[0, ci + 1]
+        ax.scatter(coords[:, 0], coords[:, 1], c=values,
+                   vmin=0, vmax=1, cmap="gray", s=s, alpha=0.9)
+        ax.invert_yaxis(); ax.set_xticks([]); ax.set_yticks([])
+        ax.set_facecolor("gray")
+        ax.set_title(gname.replace("_", " "), fontsize=9, fontweight="bold")
+
+    axes[0, 0].set_visible(False)
+
+    # --- Row 1: marginal + conditional factor maps ---
+    ax_marg = axes[1, 0]
+    ax_marg.scatter(coords[:, 0], coords[:, 1], c=factors[:, f],
+                    vmin=0, vmax=vmax_factor, cmap=cmap, s=s, alpha=0.8)
+    ax_marg.invert_yaxis(); ax_marg.set_xticks([]); ax_marg.set_yticks([])
+    ax_marg.set_facecolor("gray")
+    ax_marg.set_title(f"F{f+1} (marginal)", fontsize=9, fontweight="bold")
+
+    for ci, g in enumerate(group_ids):
+        cond_f = groupwise_factors.get(g, factors)[:, f]
+        ax = axes[1, ci + 1]
+        ax.scatter(coords[:, 0], coords[:, 1], c=cond_f,
+                   vmin=0, vmax=vmax_factor, cmap=cmap, s=s, alpha=0.8)
+        ax.invert_yaxis(); ax.set_xticks([]); ax.set_yticks([])
+        ax.set_facecolor("gray")
+        ax.set_title(f"F{f+1} (cond)", fontsize=9, fontweight="bold")
+
+    fig.suptitle(f"F{f+1} Groupwise Factors — {output_dir.name}",
+                 fontsize=11, y=1.01)
+    fig.tight_layout()
+
+    fig_dir = output_dir / "figures" / "groupwise_factors_specificity"
+    fig_dir.mkdir(parents=True, exist_ok=True)
+    g_str = ",".join(str(g) for g in group_ids)
+    out = fig_dir / f"factor{f+1}_groups{g_str}.png"
     fig.savefig(out, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"Saved: {out}")
