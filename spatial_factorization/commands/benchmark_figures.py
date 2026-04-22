@@ -1001,10 +1001,16 @@ def plot_groupwise_factors_by_specificity(
     vmax_factor = np.exp(2.3263)
 
     n_groups = len(group_ids)
-    panel_size = 3.4
+    # Size each panel to data aspect ratio so equal-aspect doesn't leave gray bars
+    x_range = float(np.ptp(coords[:, 0]))
+    y_range = float(np.ptp(coords[:, 1]))
+    data_aspect = x_range / max(y_range, 1e-9)  # width / height
+    panel_h = 3.4
+    panel_w = panel_h * data_aspect
     fig, axes = plt.subplots(2, n_groups + 1,
-                             figsize=(panel_size * (n_groups + 1), panel_size * 2),
-                             squeeze=False)
+                             figsize=(panel_w * (n_groups + 1), panel_h * 2),
+                             squeeze=False,
+                             gridspec_kw={"wspace": 0.05, "hspace": 0.1})
 
     # --- Row 0: cell type location maps ---
     for ci, g in enumerate(group_ids):
@@ -1040,8 +1046,7 @@ def plot_groupwise_factors_by_specificity(
         ax.set_title(f"F{f+1} (cond)", fontsize=9, fontweight="bold")
 
     fig.suptitle(f"F{f+1} Groupwise Factors — {output_dir.name}",
-                 fontsize=11, y=1.01)
-    fig.tight_layout()
+                 fontsize=11, y=0.98)
 
     fig_dir = output_dir / "figures" / "groupwise_factors_specificity"
     subfolder_map = {
