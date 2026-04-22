@@ -613,20 +613,19 @@ def run_single(output_dir: Path, dataset_name: str = ""):
     # Low-entropy factor gene reconstructions (LCGP only)
     plot_low_entropy_gene_reconstructions(output_dir)
 
-    # Groupwise factors by specificity (LCGP only, non-universal factors)
+    # Groupwise factors by specificity (LCGP only) — all classes, into per-class subfolders
     entropy_csv = output_dir / "mggp_lcgp" / "factor_entropy.csv"
     if entropy_csv.exists():
         df = pd.read_csv(entropy_csv)
-        # Only plot factor_specific and celltype_dependent (skip universal)
         if "class" in df.columns:
-            interesting = df[df["class"].isin(["factor_specific", "celltype_dependent"])].sort_values("shannon_entropy")
+            ordered = df.sort_values(["class", "shannon_entropy"])
         else:
-            interesting = df[df["shannon_entropy"] < 0.9].sort_values("shannon_entropy")
-        for _, row in interesting.iterrows():
+            ordered = df.sort_values("shannon_entropy")
+        for _, row in ordered.iterrows():
             fid = int(row["factor_idx"])
-            cls = row.get("class", "?")
+            cls = row.get("class", None)
             print(f"  F{fid+1} ({cls}, H={row['shannon_entropy']:.2f})")
-            plot_groupwise_factors_by_specificity(output_dir, factor_id=fid)
+            plot_groupwise_factors_by_specificity(output_dir, factor_id=fid, factor_class=cls)
 
 
 
@@ -710,7 +709,8 @@ def plot_groupwise_moran_breakdown(output_dir: Path):
                label=f"Marginal median = {marginal_median:.2f}")
     ax.legend(fontsize=9, loc="lower right")
 
-    # Panel 3: Specificity — ‖conditional‖₁ / ‖marginal‖₁ per factor (bottom row)
+    # Panel 3: Specificity — ‖conditional‖₁ / ‖marginal‖₁ per factor (bottom row),
+    # grouped by classification with vertical separators
     ax = fig.add_subplot(top_gs[1])
     spec_csv = output_dir / spec_dirname / "factor_specificity.csv"
     if spec_csv.exists():
@@ -719,35 +719,84 @@ def plot_groupwise_moran_breakdown(output_dir: Path):
         group_order = [g for g in groups if gname_to_idx.get(g) is not None]
         n_groups = len(group_order)
 
-        x = np.arange(n_factors)
+        # Load classification and reorder factors by class: specific → dependent → universal
+        ent_csv = output_dir / spec_dirname / "factor_entropy.csv"
+        if ent_csv.exists():
+            ent_df = pd.read_csv(ent_csv)
+            factor_classes = dict(zip(ent_df["factor_idx"], ent_df["class"]))
+            entropies = dict(zip(ent_df["factor_idx"], ent_df["shannon_entropy"]))
+        else:
+            factor_classes = {}
+            entropies = {}
+
+        class_order = ["factor_specific", "celltype_dependent", "universal"]
+        ordered_factors = []
+        for cls in class_order:
+            for fi in range(n_factors):
+                if factor_classes.get(fi) == cls:
+                    ordered_factors.append(fi)
+        # Append any unclassified at the end
+        for fi in range(n_factors):
+            if fi not in ordered_factors:
+                ordered_factors.append(fi)
+
+        x = np.arange(len(ordered_factors))
         width = 0.8 / n_groups
         cmap = plt.cm.tab20
 
         for gi, gname in enumerate(group_order):
             gid = gname_to_idx[gname]
-            ratios = spec_df[spec_df["group_idx"] == gid].sort_values("factor_idx")["l1_ratio"].values
+            ratios_all = spec_df[spec_df["group_idx"] == gid].sort_values("factor_idx")["l1_ratio"].values
+            # Reorder by classification order: pick ratio for each fi in ordered_factors
+            ratios = np.array([ratios_all[fi] for fi in ordered_factors])
             offset = (gi - n_groups / 2 + 0.5) * width
             ax.bar(x + offset, ratios, width, color=cmap(gi % 20), alpha=0.8,
                    label=gname)
 
-        # Load pre-computed Shannon entropy per factor
-        ent_csv = output_dir / spec_dirname / "factor_entropy.csv"
-        if ent_csv.exists():
-            ent_df = pd.read_csv(ent_csv)
-            entropies = dict(zip(ent_df["factor_idx"], ent_df["shannon_entropy"]))
-        else:
-            entropies = {}
-
-        for fi in range(n_factors):
+        # Entropy annotations on top
+        for i, fi in enumerate(ordered_factors):
             h = entropies.get(fi, float("nan"))
-            ax.text(x[fi], 0.95, f"H={h:.2f}", ha="center", va="top", fontsize=7,
+            ax.text(i, 0.95, f"H={h:.2f}", ha="center", va="top", fontsize=7,
                     transform=ax.get_xaxis_transform(), clip_on=False)
+
+        # Vertical dotted separators between classes
+        sep_positions = []
+        prev_cls = None
+        for i, fi in enumerate(ordered_factors):
+            cls = factor_classes.get(fi, "unknown")
+            if prev_cls is not None and cls != prev_cls:
+                sep_positions.append((i - 0.5, cls))
+            prev_cls = cls
+
+        for pos, next_cls in sep_positions:
+            ax.axvline(pos, color="black", linestyle=":", linewidth=1.2, zorder=3)
+
+        # Class labels centered over each group (subtle black text)
+        class_ranges = {}
+        for i, fi in enumerate(ordered_factors):
+            cls = factor_classes.get(fi, "unknown")
+            if cls not in class_ranges:
+                class_ranges[cls] = [i, i]
+            else:
+                class_ranges[cls][1] = i
+
+        for cls, (start, end) in class_ranges.items():
+            mid = (start + end) / 2
+            if cls == "factor_specific":
+                label = "cell-type specific"
+            elif cls == "celltype_dependent":
+                label = "cell-type dependent"
+            else:
+                label = cls.replace("_", " ")
+            ax.text(mid, 1.10, label, ha="center", va="bottom", fontsize=9,
+                    fontweight="bold", color="#111111",
+                    transform=ax.get_xaxis_transform())
 
         ax.axhline(1.0, color="gray", linestyle=":", linewidth=1, zorder=0, label="= 1 (preserved)")
         ax.set_xticks(x)
-        ax.set_xticklabels([f"F{f+1}" for f in range(n_factors)], fontsize=10)
+        ax.set_xticklabels([f"F{f+1}" for f in ordered_factors], fontsize=10)
         ax.set_ylabel("log₂(‖conditional‖₁ / ‖marginal‖₁)", fontsize=12)
-        ax.set_title("Factor Specificity", fontsize=14)
+        ax.set_title("")
         ax.set_yscale("log", base=2)
         ax.spines["top"].set_visible(False)
         ax.legend(fontsize=6, loc="upper left", bbox_to_anchor=(1.01, 1), ncol=1)
@@ -864,17 +913,19 @@ def plot_groupwise_factors_by_specificity(
     output_dir: Path,
     factor_id: int,
     group_ids: List[int] = None,
+    factor_class: str = None,
 ) -> None:
-    """For one low-entropy factor, plot marginal and conditional factor maps for
-    the most specific cell types (enriched + depleted).
+    """For one factor, plot marginal and conditional factor maps for selected cell types.
 
-    Layout (2 rows):
-      Row 0:        cell type location maps
-      Row 1:        [marginal F] [cond F(CT1)] [cond F(CT2)] ...
+    CT selection depends on `factor_class`:
+      - "factor_specific" (cell-type specific):  top-3 spike CTs only (highest l1_ratio)
+      - "celltype_dependent" (cell-type dependent):  2 CTs near ratio ~1 (closest to 1)
+                                                      + 1 most depleted CT
+      - "universal":                               3 CTs (highest l1_ratio — all similar)
+      - None / other:                              top-2 enriched + 1 depleted (legacy)
 
-    Uses the same fixed vmax as figures.py (exp(2.3263)) for cross-figure consistency.
-    If group_ids is None, auto-selects from factor_specificity.csv:
-      top-2 enriched (l1_ratio > 1) + 1 depleted (lowest l1_ratio).
+    Saves to `figures/groupwise_factors_specificity/<class_subfolder>/`.
+    Uses same fixed vmax as figures.py (exp(2.3263)) for cross-figure consistency.
     """
     import json
     model = "mggp_lcgp"
@@ -887,14 +938,29 @@ def plot_groupwise_factors_by_specificity(
         if spec_path.exists():
             spec_df = pd.read_csv(spec_path)
             factor_spec = spec_df[spec_df["factor_idx"] == factor_id].sort_values("l1_ratio", ascending=False)
-            enriched = factor_spec[factor_spec["l1_ratio"] > 1.0].head(2)
-            depleted = factor_spec[factor_spec["l1_ratio"] < 1.0].tail(1)
-            selected = pd.concat([enriched, depleted])
+
+            if factor_class == "factor_specific":
+                # Spikes only — the CTs driving the factor
+                selected = factor_spec.head(3)
+            elif factor_class == "celltype_dependent":
+                # 2 CTs near ratio 1 (closest to 1) + 1 most depleted
+                tmp = factor_spec.assign(_dist=(factor_spec["l1_ratio"] - 1.0).abs())
+                near_one = tmp.sort_values("_dist").head(2).drop(columns="_dist")
+                most_dep = factor_spec.sort_values("l1_ratio").head(1)
+                selected = pd.concat([near_one, most_dep]).drop_duplicates(subset=["group_idx"])
+            elif factor_class == "universal":
+                # 3 CTs — all look similar anyway
+                selected = factor_spec.head(3)
+            else:
+                enriched = factor_spec[factor_spec["l1_ratio"] > 1.0].head(2)
+                depleted = factor_spec[factor_spec["l1_ratio"] < 1.0].tail(1)
+                selected = pd.concat([enriched, depleted])
+
             group_ids = selected["group_idx"].astype(int).tolist()
             pairs = [(g, selected.loc[selected["group_idx"]==g, "group_name"].values[0],
                       round(selected.loc[selected["group_idx"]==g, "l1_ratio"].values[0], 2))
                      for g in group_ids]
-            print(f"  Auto-selected groups for F{factor_id+1}: {pairs}")
+            print(f"  Auto-selected groups for F{factor_id+1} ({factor_class}): {pairs}")
         else:
             group_ids = [0, 1, 2]
 
@@ -978,6 +1044,13 @@ def plot_groupwise_factors_by_specificity(
     fig.tight_layout()
 
     fig_dir = output_dir / "figures" / "groupwise_factors_specificity"
+    subfolder_map = {
+        "factor_specific": "cell-type_specific",
+        "celltype_dependent": "cell-type_dependent",
+        "universal": "universal",
+    }
+    if factor_class in subfolder_map:
+        fig_dir = fig_dir / subfolder_map[factor_class]
     fig_dir.mkdir(parents=True, exist_ok=True)
     g_str = ",".join(str(g) for g in group_ids)
     out = fig_dir / f"factor{f+1}_groups{g_str}.png"
