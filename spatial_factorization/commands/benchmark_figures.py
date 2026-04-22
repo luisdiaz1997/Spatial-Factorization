@@ -108,11 +108,15 @@ def _load_moran_conditional(output_dir: Path) -> dict:
     return result
 
 
-def plot_single(benchmark_dir: Path, figures_dir: Path, dataset_name: str = ""):
+def plot_single(benchmark_dir: Path, figures_dir: Path, dataset_name: str = "",
+                vertical: bool = False):
     """Bar chart comparing all models for one dataset.
 
     Spatial Quality panel uses per-factor Moran's I box plots when available;
     Accuracy and Continuity panels remain grouped bar charts.
+
+    vertical=True stacks the three subplots top-to-bottom (for narrow composite
+    panels) and writes to `benchmark_vertical.png`.
     """
     csv_path = benchmark_dir / "benchmark_results.csv"
     if not csv_path.exists():
@@ -128,10 +132,10 @@ def plot_single(benchmark_dir: Path, figures_dir: Path, dataset_name: str = ""):
     moran_per_factor = _load_moran_per_factor(output_dir, models)
     moran_conditional = _load_moran_conditional(output_dir)
 
-    fig, axes = plt.subplots(1, 3, figsize=(16, 5))
-    title = f"Benchmark: {dataset_name}" if dataset_name else "Benchmark Results"
-    fig.suptitle(title, fontsize=14, fontweight="bold")
-
+    if vertical:
+        fig, axes = plt.subplots(3, 1, figsize=(7.5, 15))
+    else:
+        fig, axes = plt.subplots(1, 3, figsize=(16, 5))
     for ax, (group_name, metrics) in zip(axes, METRIC_GROUPS.items()):
         available = [m for m in metrics if m in df.columns]
         if not available:
@@ -241,7 +245,7 @@ def plot_single(benchmark_dir: Path, figures_dir: Path, dataset_name: str = ""):
 
     plt.tight_layout()
     figures_dir.mkdir(parents=True, exist_ok=True)
-    out_path = figures_dir / "benchmark.png"
+    out_path = figures_dir / ("benchmark_vertical.png" if vertical else "benchmark.png")
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"Saved: {out_path}")
@@ -805,7 +809,6 @@ def plot_groupwise_moran_breakdown(output_dir: Path):
                 transform=ax.transAxes, fontsize=11)
         ax.set_title("Factor Specificity", fontsize=14)
 
-    plt.suptitle(f"Groupwise Conditional Analysis — {output_dir.name} ({MODEL_LABELS[model]})", fontsize=15, y=1.0)
     out = output_dir / "figures" / "groupwise_moran_breakdown.png"
     plt.savefig(out, dpi=150, bbox_inches="tight")
     print(f"Saved: {out}")
@@ -1045,9 +1048,6 @@ def plot_groupwise_factors_by_specificity(
         ax.set_facecolor("gray")
         ax.set_title(f"F{f+1} (cond)", fontsize=9, fontweight="bold")
 
-    fig.suptitle(f"F{f+1} Groupwise Factors — {output_dir.name}",
-                 fontsize=11, y=0.98)
-
     fig_dir = output_dir / "figures" / "groupwise_factors_specificity"
     subfolder_map = {
         "factor_specific": "cell-type_specific",
@@ -1255,17 +1255,22 @@ def plot_publication_panel(
     factors: dict | None = None,
     out_name: str = "publication_panel.png",
     fig_width: float = 22.0,
+    dataset_label: str | None = None,
 ) -> None:
     """Compose A/B/C panel from pre-rendered PNGs.
 
-    Layout: two columns.
-      Left column:  A (benchmark) stacked above B (groupwise_moran_breakdown).
-      Right column: C as a 2x2 grid of factor panels (column-major fill, so
-                    listing dependent factors first puts both in the left
-                    column of the 2x2).
+    Layout (letters in reading order):
+        +---+-------------+
+        |   |      B      |   A = vertical benchmark (3x1 stacked subplots)
+        | A |    (2x2)    |   B = 2x2 factor grid, column-major fill so the
+        |   |             |       first two entries (dependent) occupy the
+        +---+-------------+       left column.
+        |        C         |   C = groupwise_moran_breakdown, full width.
+        +-----------------+
 
-    Column widths are solved so both column heights match exactly -> no
-    internal whitespace.
+    Row/column sizes are solved so adjacent panels share dimensions (no
+    internal whitespace). `benchmark_vertical.png` is auto-generated if
+    missing.
 
     `factors` maps subfolder name -> list of 1-indexed factor ids:
         {"cell-type_dependent": [10, 8], "cell-type_specific": [1], "universal": [7]}
@@ -1281,9 +1286,21 @@ def plot_publication_panel(
         }
 
     fig_dir = output_dir / "figures"
-    panel_a_path = fig_dir / "benchmark.png"
+    panel_a_path = fig_dir / "benchmark_vertical.png"
     panel_b_path = fig_dir / "groupwise_moran_breakdown.png"
     spec_dir = fig_dir / "groupwise_factors_specificity"
+
+    if not panel_a_path.exists():
+        benchmark_dir = output_dir / "benchmark"
+        if not benchmark_dir.exists():
+            raise FileNotFoundError(
+                f"Need {panel_a_path} or a benchmark dir at {benchmark_dir} to generate it"
+            )
+        plot_single(
+            benchmark_dir, fig_dir,
+            dataset_name=(dataset_label or output_dir.name),
+            vertical=True,
+        )
 
     c_paths: list[Path] = []
     c_titles: list[str] = []
@@ -1304,45 +1321,41 @@ def plot_publication_panel(
             c_titles.append(f"F{fid} · {class_labels.get(cls, cls)}")
 
     if len(c_paths) != 4:
-        raise ValueError(f"2x2 layout needs exactly 4 factor panels, got {len(c_paths)}")
+        raise ValueError(f"2x2 C grid needs exactly 4 factor panels, got {len(c_paths)}")
 
     img_a = mpimg.imread(panel_a_path)
     img_b = mpimg.imread(panel_b_path)
     imgs_c = [mpimg.imread(p) for p in c_paths]
 
-    ar_a = img_a.shape[1] / img_a.shape[0]
-    ar_b = img_b.shape[1] / img_b.shape[0]
-    # Average aspect of a single C panel (they should all match ~1.77).
+    ar_a = img_a.shape[1] / img_a.shape[0]          # vertical benchmark: ~0.37
+    ar_b = img_b.shape[1] / img_b.shape[0]          # ~1.82
     ar_c_panel = float(np.mean([im.shape[1] / im.shape[0] for im in imgs_c]))
+    ar_c_2x2 = ar_c_panel                           # 2x2 grid has same aspect as a single panel
 
-    # Solve: W_left * (1/ar_a + 1/ar_b) == (W_right / 2) / ar_c_panel * 2
-    #        => left stacked height == right 2-row height
-    # With W_left + W_right = fig_width.
-    K = 1.0 / ar_a + 1.0 / ar_b        # left height per unit W_left
-    M = 1.0 / ar_c_panel                # right height per unit W_right (2 rows, each width W_right/2, height (W_right/2)/ar_c)
-    # W_left * K == W_right * M => W_left = W_right * M / K
-    w_right = fig_width / (1.0 + M / K)
-    w_left = fig_width - w_right
-    fig_height = w_right * M
+    # Top row: A and C share height H_top.
+    # W_a = H_top * ar_a, W_c = H_top * ar_c_2x2, W_a + W_c = fig_width.
+    h_top = fig_width / (ar_a + ar_c_2x2)
+    w_a = h_top * ar_a
+    w_c = h_top * ar_c_2x2
 
-    w_left_frac = w_left / fig_width
-    w_right_frac = w_right / fig_width
+    # Bottom row: B full width.
+    h_bot = fig_width / ar_b
+    fig_height = h_top + h_bot
 
     fig = plt.figure(figsize=(fig_width, fig_height))
     outer = GridSpec(
-        1, 2, figure=fig,
-        width_ratios=[w_left_frac, w_right_frac],
-        wspace=0.04,
-        left=0.02, right=0.995, top=0.985, bottom=0.01,
+        2, 1, figure=fig,
+        height_ratios=[h_top, h_bot],
+        hspace=0.05,
+        left=0.015, right=0.995, top=0.985, bottom=0.01,
     )
-
-    left = GridSpecFromSubplotSpec(
-        2, 1, subplot_spec=outer[0, 0],
-        height_ratios=[1.0 / ar_a, 1.0 / ar_b],
-        hspace=0.08,
+    top = GridSpecFromSubplotSpec(
+        1, 2, subplot_spec=outer[0, 0],
+        width_ratios=[w_a, w_c],
+        wspace=0.03,
     )
-    right = GridSpecFromSubplotSpec(
-        2, 2, subplot_spec=outer[0, 1],
+    c_grid = GridSpecFromSubplotSpec(
+        2, 2, subplot_spec=top[0, 1],
         hspace=0.06, wspace=0.04,
     )
 
@@ -1350,25 +1363,25 @@ def plot_publication_panel(
         ax.text(-0.01, 1.0, letter, transform=ax.transAxes,
                 fontsize=24, fontweight="bold", va="top", ha="right")
 
-    ax_a = fig.add_subplot(left[0, 0])
+    ax_a = fig.add_subplot(top[0, 0])
     ax_a.imshow(img_a)
     ax_a.axis("off")
     _label(ax_a, "A")
 
-    ax_b = fig.add_subplot(left[1, 0])
-    ax_b.imshow(img_b)
-    ax_b.axis("off")
-    _label(ax_b, "B")
-
     for i, (img, title) in enumerate(zip(imgs_c, c_titles)):
         # Column-major fill: first two entries go in the left column of the 2x2.
-        c, r = divmod(i, 2)
-        ax = fig.add_subplot(right[r, c])
+        col, row = divmod(i, 2)
+        ax = fig.add_subplot(c_grid[row, col])
         ax.imshow(img)
         ax.axis("off")
         ax.set_title(title, fontsize=12, pad=3)
         if i == 0:
-            _label(ax, "C")
+            _label(ax, "B")
+
+    ax_b = fig.add_subplot(outer[1, 0])
+    ax_b.imshow(img_b)
+    ax_b.axis("off")
+    _label(ax_b, "C")
 
     out_path = fig_dir / out_name
     fig.savefig(out_path, dpi=200, bbox_inches="tight")
