@@ -25,6 +25,19 @@ conditioning. The complementary question — at the gene level — is:
    universal factors, and dependent factors should produce qualitatively different gene-level
    patterns. Characterizing those differences is the point of the analysis.
 
+## Architecture Template
+
+Follow the same split as the existing conditional / Moran's I breakdown work:
+
+- **Compute + save CSVs** in `spatial_factorization/commands/benchmark_analyze.py`.
+- **Load CSVs + render multi-panel figure** in `spatial_factorization/commands/benchmark_figures.py`.
+
+Concrete templates already in the tree (do not edit — borrow patterns):
+
+- `benchmark_analyze.py:199` — `_compute_factor_specificity(model_dir, output_dir, group_names)` — loads marginal `factors.npy` + per-group `groupwise_factors/group_g.npy`, computes a per-(group, factor) metric, writes `factor_specificity.csv`; lines 233-248 show the Shannon-entropy loop pattern we already use for cell-type entropy. Extend this or add a sibling function for the new CSVs below.
+- `benchmark_analyze.py:390-395` — where new per-MGGP-model analyses are wired into the pipeline (iterates `mggp_svgp`, `mggp_lcgp`).
+- `benchmark_figures.py:613` — `plot_groupwise_moran_breakdown(output_dir)` — produces `groupwise_moran_breakdown.png` (the layout we want to mirror for new combined figures): loads CSVs, builds a multi-panel figure via `fig.add_gridspec`, saves to `output_dir / "figures" / ...png`.
+
 ## Data
 
 Everything we need is already saved by the analyze stage:
@@ -55,6 +68,9 @@ panels, one per factor.
   they should recur across many factors if truly generic.
 - **Dependent** (mid H): top genes form a program that is spatially modulated by cell identity —
   the same genes appear in multiple per-group rankings below.
+
+**Code to borrow from:**
+- `figures.py:334` — `plot_top_genes(loadings, gene_names, moran_idx, n_top, figsize_per_factor, ncols)` — renders a `ceil(L/ncols) × ncols` grid of horizontal bar charts; each panel uses `np.argsort(loadings[:, i])[-n_top:][::-1]` + `ax.barh` + `ax.invert_yaxis()`. Pattern is ~65 lines; reuse almost verbatim but annotate each panel title with `H_f` and specificity class.
 
 ### B. Entropy of the Loadings Matrix — Two Complementary Views
 
@@ -89,6 +105,9 @@ factor index. Quadrants:
 
 Save: `factor_gene_entropy.csv` with columns `factor_idx, gene_entropy`.
 
+**Code to borrow from:**
+- `benchmark_analyze.py:233-248` — the Shannon-entropy loop already used for cell-type entropy (clip → normalize → sum(-p·log₂p) → divide by `log₂(n)`). Same template, applied to column-normalized loadings instead of per-group L1 ratios.
+
 #### B2. Gene → Factors (how specialized is a gene across factors)
 
 For each gene `d`, normalize its row and compute entropy over factors:
@@ -112,6 +131,10 @@ that factor directly predicts the gene's cell-type behavior.
 Save: `gene_factor_entropy.csv` with columns `gene_idx, gene_name, factor_entropy,
 dominant_factor` where `dominant_factor = argmax_f loadings[d, f]`.
 
+**Code to borrow from:**
+- `analyze.py:479` — `_normalize_loadings(loadings)` — exact row-normalization we need (`max(loadings, eps) / sum along axis=1`). Feed its output row-by-row into the B1 entropy loop (with `log₂(L)` normalization).
+- 2D scatter of (cell-type H, factor-gene H): use a single `ax.scatter` with factor index labels; no existing analog to borrow, but the panel + annotation style from `benchmark_figures.py:613` onward is the reference.
+
 ### C. Cell-Type → Gene: which genes are associated with cell type `g`?
 
 For each cell type `g`, form a gene score that integrates over all factors. A natural choice is the
@@ -126,6 +149,11 @@ Rank genes by `gene_score[:, g]` to find the top genes per cell type.
 **Plot:** grid of G panels (one per cell type), each a bar chart of top-K genes by
 `gene_score[:, g]`. Useful as a cell-type "transcriptional signature" summary that is not tied to
 any single factor.
+
+**Code to borrow from:**
+- `figures.py:1039` — `plot_top_enriched_genes_per_group(gene_enrichment, factor_idx, n_top, figsize)` — per-group bar-panel grid (`ncols=min(4, n_groups)`, `nrows=ceil(n_groups/ncols)`), uses `ax.barh` + `ax.invert_yaxis` + per-panel title. Same grid template, different ranking source.
+- `analyze.py:499` — `_compute_gene_enrichment(global_loadings, group_loadings, gene_names, group_names)` — produces `gene_enrichment.json` with top-10 enriched/depleted per (factor, group). Different math (LFC of row-normalized loadings, not `Σ_f |W_g[d, f]|`), but the iteration pattern over groups and factor keys is the template.
+- `analyze.py:1056-1067` — saves `pca_gene_order_by_celltype.npy` (G, D): per-celltype PC1 ordering of genes. Useful if we later want to order the bars by PC1 instead of raw magnitude.
 
 ### D. Gene × Cell-Type Proportion
 
@@ -145,6 +173,11 @@ cell type makes the stratification visible.
 This directly answers "what proportion of a given gene is used by a certain cell type?" —
 complementing the factor-level specificity analysis with a gene-level counterpart.
 
+**Code to borrow from:**
+- `figures.py:491` — `plot_gene_enrichment_heatmap(global_loadings, group_loadings, group_names, moran_idx, figsize)` — renders a G×L mean-|LFC| heatmap (`imshow` + colorbar + `xticks/yticks` from group/factor labels). Not the same math as the proportion share we want, but the existing (G × *) heatmap layout + color scaling pattern transfers.
+- `analyze.py:479` — `_normalize_loadings` — row-normalize pattern; the share computation is a one-line extension (`|W_g[d, :]|_1 / Σ_g' |W_g'[d, :]|_1`).
+- No existing stacked-bar template in the repo; use `ax.barh` with `left` offsets accumulated across groups. Point-size / color conventions: `benchmark_figures.py` `MODEL_COLORS` / `plt.cm.tab20` (see `benchmark_figures.py:704` for the per-group tab20 pattern already used in the specificity bars).
+
 ### E. Gene × Factor × Cell-Type: where the three views meet
 
 For each gene `d`, we can summarize its participation in the factorization as a matrix
@@ -155,6 +188,10 @@ marker candidates from analysis C), plot each gene as a G × L heatmap.
 order), columns = factors (Moran's I order). Annotate the columns with specificity-class labels.
 This reveals, for a single gene, *which* factors carry its signal and *how* that distribution
 varies across cell types.
+
+**Code to borrow from:**
+- `figures.py:651` — `plot_factor_gene_loadings(group_loadings, group_names, gene_names, group_idx, pca_gene_order, global_loadings, figsize)` — per-cell-type (L, D) LFC heatmap. The `imshow(mat, cmap="bwr", vmin=-abs_max, vmax=abs_max)` + symmetric-colorbar pattern is what we want per-gene panel.
+- `figures.py:566` — `plot_celltype_gene_loadings` — sibling helper with the same color scale + PCA-ordering pattern, but slicing differently (G × D for one factor). Either is fine as a visual reference.
 
 ### F. Spatial Reconstruction of Factor-Specific Genes
 
@@ -191,6 +228,12 @@ reconstruct and plot its spatial expression.
 This analysis operationalizes the user-level claim that "factor-specific genes should behave like
 their dominant factor does under conditioning" — it is the visual counterpart to the entropy
 classifications in **B**.
+
+**Code to borrow from:**
+- `figures.py:1600` — `plot_celltype_summary_loadings(factors, groupwise_factors, Y, coords, groups, group_id, group_name, gene_names, group_loadings, n_top, ...)` — the closest visual template: row 0 = global factors, row 1 = cell density + conditional factors, rows 2..N = top genes by row-normalized W_c plotted spatially. The `_scatter(ax, values, vmin, vmax, cmap, title)` inner helper (lines 1665-1686) and the row/col iteration structure are exactly what F needs. **Key difference:** that function plots raw `Y[:, gene_idx]`; F plots `loadings[d, f*] * factors[:, f*]` (marginal reconstruction) and `loadings_group_g[d, f*] * groupwise_factors_g[:, f*]` (conditional reconstruction).
+- `figures.py:730` — `plot_factors_with_top_genes(factors, Y, loadings, coords, gene_names, moran_idx, n_genes, ...)` — simpler alternative template: one row per factor, column 0 = factor spatial, columns 1..N = top-gene spatial (again raw Y). Useful if we want a per-gene row (marginal + G conditionals) instead of a per-cell-type column layout.
+- `figures.py:1102` — `_draw_group_loc_panel(ax, coords, groups, g, s, alpha, cmap)` — cell density panel helper (used to mark "this is the cell type" column). Direct reuse.
+- `figures.py:2110` — `_auto_point_size(N)` — the repo-wide spatial-scatter point-size convention (`100 / sqrt(N)`).
 
 ## Context: What the Three Classes Predict for Slideseq Factors
 
