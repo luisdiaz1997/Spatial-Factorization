@@ -713,7 +713,7 @@ def plot_groupwise_moran_breakdown(output_dir: Path):
                label=f"Marginal median = {marginal_median:.2f}")
     ax.legend(fontsize=9, loc="lower right")
 
-    # Panel 3: Specificity — ‖conditional‖₁ / ‖marginal‖₁ per factor (bottom row),
+    # Panel 3: Specificity — p90(conditional) / p90(marginal) per factor (bottom row),
     # grouped by classification with vertical separators
     ax = fig.add_subplot(top_gs[1])
     spec_csv = output_dir / spec_dirname / "factor_specificity.csv"
@@ -799,7 +799,7 @@ def plot_groupwise_moran_breakdown(output_dir: Path):
         ax.axhline(1.0, color="gray", linestyle=":", linewidth=1, zorder=0, label="= 1 (preserved)")
         ax.set_xticks(x)
         ax.set_xticklabels([f"F{f+1}" for f in ordered_factors], fontsize=10)
-        ax.set_ylabel("log₂(‖conditional‖₁ / ‖marginal‖₁)", fontsize=12)
+        ax.set_ylabel("log₂(p90(conditional) / p90(marginal))", fontsize=12)
         ax.set_title("")
         ax.set_yscale("log", base=2)
         ax.spines["top"].set_visible(False)
@@ -1251,20 +1251,29 @@ def _auto_pick_panel_factors(entropy_csv: Path) -> dict:
     """Pick 4 factors for the publication panel from factor_entropy.csv.
 
     Strategy: ensure at least one of each available class (1 dep + 1 spec +
-    1 uni), then fill remaining slots by priority (dep > spec > uni). Within
-    a class, lowest entropy first for specific/dependent (cleanest signal);
-    highest entropy first for universal (most uniform). Returns 1-indexed
-    factor ids keyed by subfolder name.
+    1 uni), then fill remaining slots by priority (dep > spec > uni).
+    Within celltype_dependent, biggest peak first (max l1_ratio across groups);
+    within factor_specific, lowest entropy first (cleanest spike);
+    within universal, highest entropy first (most uniform).
+    Returns 1-indexed factor ids keyed by subfolder name.
     """
     df = pd.read_csv(entropy_csv)
 
-    def _sorted(cls: str, ascending: bool) -> list:
+    def _sorted_by_entropy(cls: str, ascending: bool) -> list:
         s = df[df["class"] == cls].sort_values("shannon_entropy", ascending=ascending)
         return s["factor_idx"].astype(int).tolist()
 
-    dep = _sorted("celltype_dependent", ascending=True)
-    spec = _sorted("factor_specific", ascending=True)
-    uni = _sorted("universal", ascending=False)
+    # Dependent factors: sort by biggest peak (max l1_ratio across groups) descending
+    spec_csv = entropy_csv.parent / "factor_specificity.csv"
+    dep_ids = df[df["class"] == "celltype_dependent"]["factor_idx"].astype(int).tolist()
+    if spec_csv.exists() and dep_ids:
+        sp = pd.read_csv(spec_csv)
+        peaks = sp.groupby("factor_idx")["l1_ratio"].max()
+        dep = sorted(dep_ids, key=lambda f: peaks.get(f, 0.0), reverse=True)
+    else:
+        dep = _sorted_by_entropy("celltype_dependent", ascending=True)
+    spec = _sorted_by_entropy("factor_specific", ascending=True)
+    uni = _sorted_by_entropy("universal", ascending=False)
 
     picks = {"cell-type_dependent": [], "cell-type_specific": [], "universal": []}
     remaining = 4
