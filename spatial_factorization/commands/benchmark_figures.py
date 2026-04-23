@@ -929,7 +929,7 @@ def plot_groupwise_factors_by_specificity(
     fig, axes = plt.subplots(2, n_groups + 1,
                              figsize=(panel_w * (n_groups + 1), panel_h * 2),
                              squeeze=False,
-                             gridspec_kw={"wspace": 0.05, "hspace": 0.1})
+                             gridspec_kw={"wspace": 0.0, "hspace": 0.02})
 
     # --- Row 0: cell type location maps ---
     for ci, g in enumerate(group_ids):
