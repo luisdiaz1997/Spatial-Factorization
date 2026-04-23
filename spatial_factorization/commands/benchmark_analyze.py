@@ -248,9 +248,9 @@ def _compute_factor_specificity(
         ent_records.append({"factor_idx": fi, "shannon_entropy": float(h)})
     ent_df = pd.DataFrame(ent_records)
 
-    # Classify each factor: factor_specific | celltype_dependent | universal
+    # Classify each factor: factor_specific | celltype_enriched | universal
     # - factor_specific: low entropy (H<0.9), most CTs depleted, 1-2 enriched
-    # - celltype_dependent: multiple CTs enriched or strong enrichment (>1.5x),
+    # - celltype_enriched: multiple CTs enriched or strong enrichment (>1.5x),
     #   shows new patterns not seen in marginal
     # - universal: high entropy, all CTs ~preserved (ratio≈1)
     class_records = []
@@ -263,7 +263,7 @@ def _compute_factor_specificity(
 
         mean_r = float(ratios.mean())
         if max_r > 1.5:
-            cls = "celltype_dependent"
+            cls = "celltype_enriched"
         elif h < 0.9 and (n_enriched >= 1 or mean_r < 0.9):
             cls = "factor_specific"
         else:

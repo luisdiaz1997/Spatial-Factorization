@@ -733,7 +733,7 @@ def plot_groupwise_moran_breakdown(output_dir: Path):
             factor_classes = {}
             entropies = {}
 
-        class_order = ["factor_specific", "celltype_dependent", "universal"]
+        class_order = ["factor_specific", "celltype_enriched", "universal"]
         ordered_factors = []
         for cls in class_order:
             for fi in range(n_factors):
@@ -788,8 +788,8 @@ def plot_groupwise_moran_breakdown(output_dir: Path):
             mid = (start + end) / 2
             if cls == "factor_specific":
                 label = "cell-type specific"
-            elif cls == "celltype_dependent":
-                label = "cell-type dependent"
+            elif cls == "celltype_enriched":
+                label = "cell-type enriched"
             else:
                 label = cls.replace("_", " ")
             ax.text(mid, 1.10, label, ha="center", va="bottom", fontsize=9,
@@ -922,7 +922,7 @@ def plot_groupwise_factors_by_specificity(
 
     CT selection depends on `factor_class`:
       - "factor_specific" (cell-type specific):   top-3 spike CTs (highest l1_ratio)
-      - "celltype_dependent" (cell-type dependent): top-3 peaks (biggest first)
+      - "celltype_enriched" (cell-type enriched): top-3 peaks (biggest first)
       - "universal":                                3 CTs (highest l1_ratio — all similar)
       - None / other:                               top-2 enriched + 1 depleted (legacy)
 
@@ -944,7 +944,7 @@ def plot_groupwise_factors_by_specificity(
             if factor_class == "factor_specific":
                 # Spikes only — the CTs driving the factor
                 selected = factor_spec.head(3)
-            elif factor_class == "celltype_dependent":
+            elif factor_class == "celltype_enriched":
                 # Biggest peaks first — the CTs where the factor lights up
                 selected = factor_spec.head(3)
             elif factor_class == "universal":
@@ -1049,7 +1049,7 @@ def plot_groupwise_factors_by_specificity(
     fig_dir = output_dir / "figures" / "groupwise_factors_specificity"
     subfolder_map = {
         "factor_specific": "cell-type_specific",
-        "celltype_dependent": "cell-type_dependent",
+        "celltype_enriched": "cell-type_enriched",
         "universal": "universal",
     }
     if factor_class in subfolder_map:
@@ -1252,7 +1252,7 @@ def _auto_pick_panel_factors(entropy_csv: Path) -> dict:
 
     Strategy: ensure at least one of each available class (1 dep + 1 spec +
     1 uni), then fill remaining slots by priority (dep > spec > uni).
-    Within celltype_dependent, biggest peak first (max l1_ratio across groups);
+    Within celltype_enriched, biggest peak first (max l1_ratio across groups);
     within factor_specific, lowest entropy first (cleanest spike);
     within universal, highest entropy first (most uniform).
     Returns 1-indexed factor ids keyed by subfolder name.
@@ -1265,21 +1265,21 @@ def _auto_pick_panel_factors(entropy_csv: Path) -> dict:
 
     # Dependent factors: sort by biggest peak (max l1_ratio across groups) descending
     spec_csv = entropy_csv.parent / "factor_specificity.csv"
-    dep_ids = df[df["class"] == "celltype_dependent"]["factor_idx"].astype(int).tolist()
+    dep_ids = df[df["class"] == "celltype_enriched"]["factor_idx"].astype(int).tolist()
     if spec_csv.exists() and dep_ids:
         sp = pd.read_csv(spec_csv)
         peaks = sp.groupby("factor_idx")["l1_ratio"].max()
         dep = sorted(dep_ids, key=lambda f: peaks.get(f, 0.0), reverse=True)
     else:
-        dep = _sorted_by_entropy("celltype_dependent", ascending=True)
+        dep = _sorted_by_entropy("celltype_enriched", ascending=True)
     spec = _sorted_by_entropy("factor_specific", ascending=True)
     uni = _sorted_by_entropy("universal", ascending=False)
 
-    picks = {"cell-type_dependent": [], "cell-type_specific": [], "universal": []}
+    picks = {"cell-type_enriched": [], "cell-type_specific": [], "universal": []}
     remaining = 4
 
     # Seed one from each available class first so all classes are represented.
-    for pool, key in ((dep, "cell-type_dependent"),
+    for pool, key in ((dep, "cell-type_enriched"),
                       (spec, "cell-type_specific"),
                       (uni, "universal")):
         if pool and remaining > 0:
@@ -1289,7 +1289,7 @@ def _auto_pick_panel_factors(entropy_csv: Path) -> dict:
     # Fill the rest by priority: dep > spec > uni.
     while remaining > 0:
         if dep:
-            picks["cell-type_dependent"].append(dep.pop(0))
+            picks["cell-type_enriched"].append(dep.pop(0))
         elif spec:
             picks["cell-type_specific"].append(spec.pop(0))
         elif uni:
@@ -1324,7 +1324,7 @@ def plot_publication_panel(
     missing.
 
     `factors` maps subfolder name -> list of 1-indexed factor ids:
-        {"cell-type_dependent": [10, 8], "cell-type_specific": [1], "universal": [7]}
+        {"cell-type_enriched": [10, 8], "cell-type_specific": [1], "universal": [7]}
     """
     import matplotlib.image as mpimg
     from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
@@ -1359,7 +1359,7 @@ def plot_publication_panel(
     c_titles: list[str] = []
     class_labels = {
         "cell-type_specific": "cell-type specific",
-        "cell-type_dependent": "cell-type dependent",
+        "cell-type_enriched": "cell-type enriched",
         "universal": "universal",
     }
     for cls, ids in factors.items():
