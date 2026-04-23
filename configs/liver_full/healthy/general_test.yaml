@@ -1,5 +1,5 @@
 # TEST config for Liver MERFISH healthy dataset (200-epoch runs)
-# Use: spatial_factorization run all -c configs/liver/healthy/general_test.yaml
+# Use: spatial_factorization run all -c configs/liver_full/healthy/general_test.yaml
 
 name: liver_healthy_test
 seed: 67

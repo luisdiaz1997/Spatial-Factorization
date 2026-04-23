@@ -634,96 +634,21 @@ def run_single(output_dir: Path, dataset_name: str = ""):
 
 
 def plot_groupwise_moran_breakdown(output_dir: Path):
-    """Groupwise conditional analysis: Moran's I box plots + factor specificity (norm ratio to marginal)."""
+    """Factor specificity bar chart (L1 conditional/marginal ratio per group per factor)."""
     model = "mggp_lcgp"
-    color = MODEL_COLORS[model]
-
-    csv_path = output_dir / model / "groupwise_moran_i.csv"
-    if not csv_path.exists():
-        print(f"  No groupwise_moran_i.csv for {model}, skipping")
-        return
-    df = pd.read_csv(csv_path)
-    marginal_median = pd.read_csv(output_dir / model / "moran_i.csv")["moran_i"].median()
-
-    group_means = df.groupby("group_name")["moran_i"].mean().sort_values(ascending=False)
-    groups = group_means.index.tolist()
-    factors = sorted(df["factor_idx"].unique())
-    n_factors = len(factors)
-
     spec_dirname = MODEL_DIRNAME.get(model, model)
-
-    fig = plt.figure(figsize=(22, 12), constrained_layout=True)
-    top_gs = fig.add_gridspec(nrows=2, height_ratios=[1, 1], hspace=0.28)
-    row1 = top_gs[0].subgridspec(1, 2, wspace=0.25)
-    rng = np.random.default_rng(42)
-
-    # Panel 1: Per cell type (Moran's I)
-    ax = fig.add_subplot(row1[0])
-    data_by_group = [df[df["group_name"] == g]["moran_i"].values for g in groups]
-    positions = np.arange(len(groups))
-    bp = ax.boxplot(data_by_group, positions=positions, widths=0.6, patch_artist=True,
-                    showmeans=True, meanprops=dict(marker="D", markerfacecolor="white",
-                                                   markeredgecolor="black", markersize=4),
-                    medianprops=dict(color="black", linewidth=1.5),
-                    flierprops=dict(marker="o", markerfacecolor="none",
-                                    markeredgecolor="black", markersize=5))
-    for patch in bp["boxes"]:
-        patch.set_facecolor(color)
-        patch.set_alpha(0.7)
-    for i, vals in enumerate(data_by_group):
-        jitter = rng.uniform(-0.15, 0.15, size=len(vals))
-        ax.scatter(positions[i] + jitter, vals, color=color,
-                   alpha=0.5, s=15, zorder=3, edgecolors="gray", linewidths=0.5)
-    ax.set_xticks(positions)
-    ax.set_xticklabels(groups, rotation=60, ha="right", fontsize=9)
-    ax.set_ylabel("Moran's I", fontsize=12)
-    ax.set_title("Per Cell Type", fontsize=14)
-    ax.set_ylim(0, 1.05)
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
-    ax.axhline(marginal_median, color="gray", linestyle=":", linewidth=1.5, zorder=0,
-               label=f"Marginal median = {marginal_median:.2f}")
-    ax.legend(fontsize=9, loc="lower right")
-
-    # Panel 2: Per factor (Moran's I)
-    ax = fig.add_subplot(row1[1])
-    data_by_factor = [df[df["factor_idx"] == f]["moran_i"].values for f in factors]
-    positions = np.arange(len(factors))
-    bp = ax.boxplot(data_by_factor, positions=positions, widths=0.6, patch_artist=True,
-                    showmeans=True, meanprops=dict(marker="D", markerfacecolor="white",
-                                                   markeredgecolor="black", markersize=4),
-                    medianprops=dict(color="black", linewidth=1.5),
-                    flierprops=dict(marker="o", markerfacecolor="none",
-                                    markeredgecolor="black", markersize=5))
-    for patch in bp["boxes"]:
-        patch.set_facecolor(color)
-        patch.set_alpha(0.7)
-    for i, vals in enumerate(data_by_factor):
-        jitter = rng.uniform(-0.15, 0.15, size=len(vals))
-        ax.scatter(positions[i] + jitter, vals, color=color,
-                   alpha=0.5, s=15, zorder=3, edgecolors="gray", linewidths=0.5)
-    ax.set_xticks(positions)
-    ax.set_xticklabels([f"Factor {f+1}" for f in factors], fontsize=10)
-    ax.set_ylabel("Moran's I", fontsize=12)
-    ax.set_title("Per Factor", fontsize=14)
-    ax.set_ylim(0, 1.05)
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
-    ax.axhline(marginal_median, color="gray", linestyle=":", linewidth=1.5, zorder=0,
-               label=f"Marginal median = {marginal_median:.2f}")
-    ax.legend(fontsize=9, loc="lower right")
-
-    # Panel 3: Specificity — L1(conditional) / L1(marginal) per factor (bottom row),
-    # grouped by classification with vertical separators
-    ax = fig.add_subplot(top_gs[1])
     spec_csv = output_dir / spec_dirname / "factor_specificity.csv"
+
+    fig, ax = plt.subplots(figsize=(22, 6))
+
     if spec_csv.exists():
         spec_df = pd.read_csv(spec_csv)
-        gname_to_idx = dict(zip(df["group_name"], df["group_idx"]))
+        groups = sorted(spec_df["group_name"].unique())
+        n_factors = spec_df["factor_idx"].nunique()
+        gname_to_idx = dict(zip(spec_df["group_name"], spec_df["group_idx"]))
         group_order = [g for g in groups if gname_to_idx.get(g) is not None]
         n_groups = len(group_order)
 
-        # Load classification and reorder factors by class: specific → dependent → universal
         ent_csv = output_dir / spec_dirname / "factor_entropy.csv"
         if ent_csv.exists():
             ent_df = pd.read_csv(ent_csv)
@@ -739,7 +664,6 @@ def plot_groupwise_moran_breakdown(output_dir: Path):
             for fi in range(n_factors):
                 if factor_classes.get(fi) == cls:
                     ordered_factors.append(fi)
-        # Append any unclassified at the end
         for fi in range(n_factors):
             if fi not in ordered_factors:
                 ordered_factors.append(fi)
@@ -751,19 +675,15 @@ def plot_groupwise_moran_breakdown(output_dir: Path):
         for gi, gname in enumerate(group_order):
             gid = gname_to_idx[gname]
             ratios_all = spec_df[spec_df["group_idx"] == gid].sort_values("factor_idx")["l1_ratio"].values
-            # Reorder by classification order: pick ratio for each fi in ordered_factors
             ratios = np.array([ratios_all[fi] for fi in ordered_factors])
             offset = (gi - n_groups / 2 + 0.5) * width
-            ax.bar(x + offset, ratios, width, color=cmap(gi % 20), alpha=0.8,
-                   label=gname)
+            ax.bar(x + offset, ratios, width, color=cmap(gi % 20), alpha=0.8, label=gname)
 
-        # Entropy annotations on top
         for i, fi in enumerate(ordered_factors):
             h = entropies.get(fi, float("nan"))
             ax.text(i, 0.95, f"H={h:.2f}", ha="center", va="top", fontsize=7,
                     transform=ax.get_xaxis_transform(), clip_on=False)
 
-        # Vertical dotted separators between classes
         sep_positions = []
         prev_cls = None
         for i, fi in enumerate(ordered_factors):
@@ -771,11 +691,9 @@ def plot_groupwise_moran_breakdown(output_dir: Path):
             if prev_cls is not None and cls != prev_cls:
                 sep_positions.append((i - 0.5, cls))
             prev_cls = cls
-
-        for pos, next_cls in sep_positions:
+        for pos, _ in sep_positions:
             ax.axvline(pos, color="black", linestyle=":", linewidth=1.2, zorder=3)
 
-        # Class labels centered over each group (subtle black text)
         class_ranges = {}
         for i, fi in enumerate(ordered_factors):
             cls = factor_classes.get(fi, "unknown")
@@ -800,14 +718,12 @@ def plot_groupwise_moran_breakdown(output_dir: Path):
         ax.set_xticks(x)
         ax.set_xticklabels([f"F{f+1}" for f in ordered_factors], fontsize=10)
         ax.set_ylabel("log₂(L1(conditional) / L1(marginal))", fontsize=12)
-        ax.set_title("")
         ax.set_yscale("log", base=2)
         ax.spines["top"].set_visible(False)
         ax.legend(fontsize=6, loc="upper left", bbox_to_anchor=(1.01, 1), ncol=1)
     else:
-        ax.text(0.5, 0.5, "No groupwise_factors\nor marginal found", ha="center", va="center",
+        ax.text(0.5, 0.5, "No specificity data found", ha="center", va="center",
                 transform=ax.transAxes, fontsize=11)
-        ax.set_title("Factor Specificity", fontsize=14)
 
     out = output_dir / "figures" / "groupwise_moran_breakdown.png"
     plt.savefig(out, dpi=150, bbox_inches="tight")
@@ -1411,7 +1327,7 @@ def plot_publication_panel(
     )
 
     def _label(ax, letter: str):
-        ax.text(-0.01, 1.0, letter, transform=ax.transAxes,
+        ax.text(-0.01, 1.0, f"{letter})", transform=ax.transAxes,
                 fontsize=24, fontweight="bold", va="top", ha="right")
 
     ax_a = fig.add_subplot(top[0, 0])
@@ -1434,7 +1350,13 @@ def plot_publication_panel(
     ax_b.axis("off")
     _label(ax_b, "C")
 
-    out_path = fig_dir / out_name
+    # Derive dataset-aware filename from output_dir path (e.g. liver_healthy_AM042_panel.png)
+    if out_name == "publication_panel.png":
+        parts = [p for p in output_dir.parts if p != "outputs"]
+        ds_name = "_".join(parts) + "_panel.png"
+    else:
+        ds_name = out_name
+    out_path = fig_dir / ds_name
     fig.savefig(out_path, dpi=200, bbox_inches="tight")
     plt.close(fig)
     print(f"Saved: {out_path}")

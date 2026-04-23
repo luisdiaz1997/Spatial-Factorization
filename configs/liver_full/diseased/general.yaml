@@ -1,21 +1,19 @@
-# Patient 1 (sisi_ingest) with v11_top (clTopLevel) labels
-# N=844,468 cells × D=211 genes; coords in obs["center_x"], obs["center_y"]
-# Use: spatial_factorization generate -c configs/colon/patient1/v11_top/general.yaml
-# Use: spatial_factorization run all -c configs/colon/patient1/v11_top/general.yaml
+# General config for Liver MERFISH diseased dataset (310K cells, 317 genes)
+# Uses same LiverLoader as healthy but with different path and cell_type_column.
+# Use: spatial_factorization generate -c configs/liver_full/diseased/general.yaml
+# Use: spatial_factorization run all -c configs/liver_full/diseased/general.yaml
 
-name: colon_patient1_v11_top
+name: liver_diseased
 seed: 67
-dataset: colon
-output_dir: outputs/colon/patient1/v11_top
+dataset: liver
+output_dir: outputs/liver_full/diseased
 
 preprocessing:
   spatial_scale: 50.0
-  h5ad_path: /gladstone/engelhardt/lab/lchumpitaz/datasets/colon/patient1_v11.h5ad
-  labels_path: ~  # None: read groups from adata.obs[group_column]
-  group_column: v11_top
-  subsample: ~  # no subsampling
-  min_group_fraction: 0.01
+  path: /gladstone/engelhardt/lab/lchumpitaz/datasets/liver/adata_healthy_diseased_merfish.h5ad
+  cell_type_column: Cell_Type_final
 
+  min_group_fraction: 0.01  # drop groups with <1% of total cells
 model:
   # Common params
   n_components: 10
@@ -49,5 +47,5 @@ training:
   verbose: false
   device: gpu
   batch_size: 7000
-  y_batch_size: 211
+  y_batch_size: 2000
   shuffle: true

@@ -166,7 +166,7 @@ class JobRunner:
             skip_general: Skip general configs; treat all non-general yamls as per-model configs.
         """
         self.config_path = Path(config_path)
-        self.stages = stages or ["train", "analyze", "figures"]
+        self.stages = stages or ["preprocess", "train", "analyze", "figures"]
         self.force_preprocess = force_preprocess
         self.dry_run = dry_run
         self.resume = resume

@@ -91,13 +91,16 @@ Spatial-Factorization/
 ├── configs/merfish/           # squidpy MERFISH (73K cells, 161 genes)
 │   ├── general.yaml
 │   └── general_test.yaml
-├── configs/liver/
+├── configs/liver_full/
 │   ├── healthy/               # Liver healthy MERFISH (90K cells, 317 genes)
 │   │   ├── general.yaml
 │   │   └── general_test.yaml
 │   └── diseased/              # Liver diseased MERFISH (310K cells, 317 genes)
 │       ├── general.yaml
 │       └── general_test.yaml
+├── configs/liver/                # Per-sample liver configs (subset of donors)
+│   ├── healthy/{AM042,AM048,AM061}/
+│   └── diseased/{AM031,AM042,AM048,AM061,AM062,AM072}/
 ├── configs/tenxvisium/        # squidpy 10x Visium H&E (~3K spots, ~15K genes)
 │   ├── general.yaml
 │   └── general_test.yaml
@@ -510,8 +513,8 @@ All `general.yaml` files share the same model hyperparams: `n_components=10`, `n
 | Config dir | Dataset key | N | D | Groups | batch_size | y_batch_size |
 |-----------|-------------|---|---|--------|-----------|--------------|
 | `configs/merfish/` | `merfish` | 73K | 161 | `obs["Cell_class"]` | 15000 | 161 |
-| `configs/liver/healthy/` | `liver` | 90K | 317 | `obs["Cell_Type"]` | 13000 | 317 |
-| `configs/liver/diseased/` | `liver` | 310K | 317 | `obs["Cell_Type_final"]` | 13000 | 317 |
+| `configs/liver_full/healthy/` | `liver` | 90K | 317 | `obs["Cell_Type"]` | 13000 | 317 |
+| `configs/liver_full/diseased/` | `liver` | 310K | 317 | `obs["Cell_Type_final"]` | 13000 | 317 |
 | `configs/tenxvisium/` | `tenxvisium` | ~3K | ~15K | `obs["cluster"]` | 3000 | 2000 |
 | `configs/sdmbench/151507/` … `151676/` | `sdmbench` | ~4K | ~33K | `obs["Region"]` | 4221 | 2000 |
 | `configs/osmfish/` | `osmfish` | 4.8K | 33 | `obs["ClusterName"]` | 4839 | 33 |
