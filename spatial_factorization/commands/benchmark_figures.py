@@ -1319,7 +1319,7 @@ def plot_publication_panel(
     top = GridSpecFromSubplotSpec(
         1, 2, subplot_spec=outer[0, 0],
         width_ratios=[w_a, w_c],
-        wspace=0.03,
+        wspace=0.08,
     )
     c_grid = GridSpecFromSubplotSpec(
         2, 2, subplot_spec=top[0, 1],
