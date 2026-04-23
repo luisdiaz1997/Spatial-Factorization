@@ -199,28 +199,29 @@ def _compute_groupwise_moran_i(
 def _compute_factor_specificity(
     model_dir: Path, output_dir: Path, group_names: list
 ) -> None:
-    """Compute p90 specificity: p90(conditional) / p90(marginal) per group per factor.
+    """Compute L1 specificity: ||cond||_1 / ||marginal||_1 per group per factor.
 
-    Uses the 90th percentile rather than L1 sum or median: captures where the
-    factor activates while staying robust to GP-extrapolation outliers in the
-    top 1-5%. Column name l1_ratio is kept for downstream compatibility.
-
-    Saves factor_specificity.csv with columns: group_idx, group_name, factor_idx, l1_ratio.
+    Clips both marginal and conditional at the per-factor 99th percentile of the
+    marginal before computing L1, to prevent GP-extrapolation outliers in the
+    top 1% from dominating the sum.
     """
     gf_dir = model_dir / "groupwise_factors"
     if not gf_dir.exists():
         return
 
     marginal = np.load(model_dir / "factors.npy")
-    m_p90 = np.percentile(marginal, 90, axis=0)
+    p99 = np.percentile(marginal, 99, axis=0)
+    marginal_clipped = np.minimum(marginal, p99[None, :])
+    m_l1 = marginal_clipped.sum(axis=0)
 
     records = []
     for gf_path in sorted(gf_dir.glob("group_*.npy"), key=lambda p: int(p.stem.split("_")[1])):
         g = int(gf_path.stem.split("_")[1])
         group_name = group_names[g] if g < len(group_names) else str(g)
         cond = np.load(gf_path)
-        c_p90 = np.percentile(cond, 90, axis=0)
-        ratios = c_p90 / (m_p90 + 1e-10)
+        cond_clipped = np.minimum(cond, p99[None, :])
+        c_l1 = cond_clipped.sum(axis=0)
+        ratios = c_l1 / (m_l1 + 1e-10)
         for fi, r in enumerate(ratios):
             records.append({
                 "group_idx": g,

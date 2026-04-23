@@ -713,7 +713,7 @@ def plot_groupwise_moran_breakdown(output_dir: Path):
                label=f"Marginal median = {marginal_median:.2f}")
     ax.legend(fontsize=9, loc="lower right")
 
-    # Panel 3: Specificity — p90(conditional) / p90(marginal) per factor (bottom row),
+    # Panel 3: Specificity — L1(conditional) / L1(marginal) per factor (bottom row),
     # grouped by classification with vertical separators
     ax = fig.add_subplot(top_gs[1])
     spec_csv = output_dir / spec_dirname / "factor_specificity.csv"
@@ -799,7 +799,7 @@ def plot_groupwise_moran_breakdown(output_dir: Path):
         ax.axhline(1.0, color="gray", linestyle=":", linewidth=1, zorder=0, label="= 1 (preserved)")
         ax.set_xticks(x)
         ax.set_xticklabels([f"F{f+1}" for f in ordered_factors], fontsize=10)
-        ax.set_ylabel("log₂(p90(conditional) / p90(marginal))", fontsize=12)
+        ax.set_ylabel("log₂(L1(conditional) / L1(marginal))", fontsize=12)
         ax.set_title("")
         ax.set_yscale("log", base=2)
         ax.spines["top"].set_visible(False)
