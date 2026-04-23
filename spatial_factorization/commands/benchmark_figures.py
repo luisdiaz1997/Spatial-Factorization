@@ -1055,8 +1055,7 @@ def plot_groupwise_factors_by_specificity(
     if factor_class in subfolder_map:
         fig_dir = fig_dir / subfolder_map[factor_class]
     fig_dir.mkdir(parents=True, exist_ok=True)
-    g_str = ",".join(str(g) for g in group_ids)
-    out = fig_dir / f"factor{f+1}_groups{g_str}.png"
+    out = fig_dir / f"factor{f+1}.png"
     fig.savefig(out, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"Saved: {out}")
@@ -1357,12 +1356,10 @@ def plot_publication_panel(
     for cls, ids in factors.items():
         cls_dir = spec_dir / cls
         for fid in ids:
-            matches = sorted(cls_dir.glob(f"factor{fid}_groups*.png"))
-            if not matches:
-                raise FileNotFoundError(
-                    f"No file factor{fid}_groups*.png in {cls_dir}"
-                )
-            c_paths.append(matches[0])
+            panel = cls_dir / f"factor{fid}.png"
+            if not panel.exists():
+                raise FileNotFoundError(f"No file {panel}")
+            c_paths.append(panel)
             c_titles.append(f"F{fid} · {class_labels.get(cls, cls)}")
 
     if len(c_paths) != 4:
