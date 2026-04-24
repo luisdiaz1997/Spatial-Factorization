@@ -920,16 +920,20 @@ def plot_groupwise_factors_by_specificity(
     vmax_factor = np.exp(2.3263)
 
     n_groups = len(group_ids)
-    # Size each panel to data aspect ratio so equal-aspect doesn't leave gray bars
-    x_range = float(np.ptp(coords[:, 0]))
-    y_range = float(np.ptp(coords[:, 1]))
-    data_aspect = x_range / max(y_range, 1e-9)  # width / height
-    panel_h = 3.4
-    panel_w = panel_h * data_aspect
+    # Square panels: center data, use max(x_range, y_range) as half-window so
+    # elongated tissue gets gray padding instead of stretching the panel.
+    x_mid = float((coords[:, 0].min() + coords[:, 0].max()) / 2)
+    y_mid = float((coords[:, 1].min() + coords[:, 1].max()) / 2)
+    half = max(float(np.ptp(coords[:, 0])), float(np.ptp(coords[:, 1]))) / 2
+    panel_size = 3.4
     fig, axes = plt.subplots(2, n_groups + 1,
-                             figsize=(panel_w * (n_groups + 1), panel_h * 2),
+                             figsize=(panel_size * (n_groups + 1), panel_size * 2),
                              squeeze=False,
                              gridspec_kw={"wspace": 0.0, "hspace": 0.02})
+
+    def _square(ax):
+        ax.set_xlim(x_mid - half, x_mid + half)
+        ax.set_ylim(y_mid + half, y_mid - half)  # inverted y
 
     # --- Row 0: cell type location maps ---
     for ci, g in enumerate(group_ids):
@@ -938,7 +942,7 @@ def plot_groupwise_factors_by_specificity(
         ax = axes[0, ci + 1]
         ax.scatter(coords[:, 0], coords[:, 1], c=values,
                    vmin=0, vmax=1, cmap="gray", s=s, alpha=0.9)
-        ax.invert_yaxis(); ax.set_xticks([]); ax.set_yticks([])
+        _square(ax); ax.set_xticks([]); ax.set_yticks([])
         ax.set_aspect("equal")
         ax.set_facecolor("gray")
         ax.set_title(textwrap.fill(gname.replace("_", " "), width=18), fontsize=9, fontweight="bold")
@@ -949,7 +953,7 @@ def plot_groupwise_factors_by_specificity(
     ax_marg = axes[1, 0]
     ax_marg.scatter(coords[:, 0], coords[:, 1], c=factors[:, f],
                     vmin=0, vmax=vmax_factor, cmap=cmap, s=s, alpha=0.8)
-    ax_marg.invert_yaxis(); ax_marg.set_xticks([]); ax_marg.set_yticks([])
+    _square(ax_marg); ax_marg.set_xticks([]); ax_marg.set_yticks([])
     ax_marg.set_aspect("equal")
     ax_marg.set_facecolor("gray")
 
@@ -958,7 +962,7 @@ def plot_groupwise_factors_by_specificity(
         ax = axes[1, ci + 1]
         ax.scatter(coords[:, 0], coords[:, 1], c=cond_f,
                    vmin=0, vmax=vmax_factor, cmap=cmap, s=s, alpha=0.8)
-        ax.invert_yaxis(); ax.set_xticks([]); ax.set_yticks([])
+        _square(ax); ax.set_xticks([]); ax.set_yticks([])
         ax.set_aspect("equal")
         ax.set_facecolor("gray")
 
