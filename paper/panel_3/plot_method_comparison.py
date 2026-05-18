@@ -267,6 +267,7 @@ def render(mode: str, dataset: str, out_path: Path,
            cell_type_indices: list[int] | None = None,
            ref_factor_indices: list[int] | None = None,
            rank_by: str = "moran_i",
+           rank_from: str = "right",
            dpi: int = 200) -> None:
     if mode not in _MODE_PAIRS:
         raise ValueError(f"Unknown mode: {mode!r}; choose from {list(_MODE_PAIRS)}")
@@ -284,18 +285,21 @@ def render(mode: str, dataset: str, out_path: Path,
     meta = json.loads((dataset_root / "preprocessed" / "metadata.json").read_text())
     group_names = meta["group_names"]
 
-    # Reference factors + cell-type rows: derive from the RIGHT (treatment) method
+    # Pick which side drives reference factor + cell-type selection.
+    if rank_from not in ("left", "right"):
+        raise ValueError(f"rank_from must be 'left' or 'right', got {rank_from!r}")
+    ref_dir = left_dir if rank_from == "left" else right_dir
+
+    # Reference factors + cell-type rows derived from the chosen ref side.
     if ref_factor_indices is None:
         if rank_by == "enrichment":
-            # Each of the top-3 enriched factors picks its OWN most-enriched
-            # cell type for its row; cell-type rows are deduplicated.
             ref_factor_indices, auto_celltypes = _pick_enriched_factor_celltype_pairs(
-                right_dir, k=3)
+                ref_dir, k=3)
             if cell_type_indices is None:
                 cell_type_indices = auto_celltypes
         elif rank_by == "moran_i":
             ref_factor_indices = _pick_top_spatial_factors(
-                right_dir / "metrics.json", k=3)
+                ref_dir / "metrics.json", k=3)
         else:
             raise ValueError(f"Unknown rank_by={rank_by!r}; "
                              f"choose 'moran_i' or 'enrichment'.")
@@ -306,13 +310,22 @@ def render(mode: str, dataset: str, out_path: Path,
         if len(cell_type_indices) < 3:
             cell_type_indices = list(range(min(3, len(group_names))))
 
-    # Match left-side factors to right-side via gene-loading correlation
+    # Match the OTHER side's factors to the ref side via gene-loading correlation.
     right_loadings = _load_loadings(right_dir)
     left_loadings = _load_loadings(left_dir)
-    matched_left_factors = _match_factors(
-        ref_loadings=right_loadings, query_loadings=left_loadings,
-        ref_factor_ids=ref_factor_indices,
-    )
+    if rank_from == "right":
+        left_factor_indices = _match_factors(
+            ref_loadings=right_loadings, query_loadings=left_loadings,
+            ref_factor_ids=ref_factor_indices,
+        )
+        right_factor_indices = ref_factor_indices
+    else:  # rank_from == "left"
+        right_factor_indices = _match_factors(
+            ref_loadings=left_loadings, query_loadings=right_loadings,
+            ref_factor_ids=ref_factor_indices,
+        )
+        left_factor_indices = ref_factor_indices
+    matched_left_factors = left_factor_indices  # kept for downstream compat
 
     # Spatial coords + groups (shared across methods — both fit the same data)
     coords = np.load(dataset_root / "preprocessed" / "X.npy")
@@ -325,14 +338,16 @@ def render(mode: str, dataset: str, out_path: Path,
     N = coords.shape[0]
     s = _auto_point_size(N)
 
-    print(f"Reference factor indices (right side, top-3 by {rank_by}): {ref_factor_indices}")
-    print(f"Matched left-side factor indices (gene-loading r): {matched_left_factors}")
+    print(f"Reference side: {rank_from}; top-3 factors by {rank_by}: {ref_factor_indices}")
+    other_side = "left" if rank_from == "right" else "right"
+    other_idx = left_factor_indices if rank_from == "right" else right_factor_indices
+    print(f"Matched {other_side}-side factor indices (gene-loading r): {other_idx}")
     print(f"Cell-type rows: {[group_names[g] for g in cell_type_indices]}")
 
     fig_left = _render_block(left_dir, coords, groups_np, group_names,
-                              cell_type_indices, matched_left_factors, s)
+                              cell_type_indices, left_factor_indices, s)
     fig_right = _render_block(right_dir, coords, groups_np, group_names,
-                               cell_type_indices, ref_factor_indices, s)
+                               cell_type_indices, right_factor_indices, s)
 
     img_left = _fig_to_pil(fig_left, dpi=dpi)
     img_right = _fig_to_pil(fig_right, dpi=dpi)
@@ -415,8 +430,13 @@ def main():
     p.add_argument("--rank-by", choices=["moran_i", "enrichment"],
                    default="moran_i",
                    help="Auto-select top-3 reference factors by Moran's I "
-                        "(spatial autocorrelation) or by max-over-groups "
-                        "mean log fold-change (cell-type-enrichment).")
+                        "(spatial autocorrelation) or by max-over-groups L1 "
+                        "specificity ratio (benchmark-style cell-type "
+                        "enrichment).")
+    p.add_argument("--rank-from", choices=["left", "right"], default="right",
+                   help="Which method picks reference factors + cell-type "
+                        "rows. The other method's columns are matched in via "
+                        "gene-loading correlation.")
     args = p.parse_args()
 
     cell_type_indices = None
@@ -432,7 +452,8 @@ def main():
     render(args.mode, args.dataset, Path(args.out),
            cell_type_indices=cell_type_indices,
            ref_factor_indices=factor_indices,
-           rank_by=args.rank_by)
+           rank_by=args.rank_by,
+           rank_from=args.rank_from)
 
 
 if __name__ == "__main__":
