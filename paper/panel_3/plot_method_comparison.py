@@ -139,22 +139,37 @@ def _pick_top_spatial_factors(metrics_path: Path, k: int = 3) -> list[int]:
     return [int(i) for i in sorted_idx[:k]]
 
 
-def _pick_top_enriched_factors(enrichment_path: Path, k: int = 3) -> list[int]:
-    """Top-k factors by max-over-groups mean log fold-change.
+def _pick_top_enriched_factors(method_dir: Path, k: int = 3) -> list[int]:
+    """Top-k factors by max-over-groups L1 specificity ratio.
 
-    Reads gene_enrichment.json and for each factor takes the highest
-    per-group mean_lfc as its enrichment score. Returns the factor indices
-    sorted descending by that score.
+    Mirrors the benchmark pipeline (spatial_factorization.commands.
+    benchmark_analyze._compute_factor_specificity): for each factor, clip
+    both the marginal (unconditional) and per-group conditional factor maps
+    at the per-factor 99th percentile of the marginal (to prevent
+    GP-extrapolation outliers from dominating the L1 sum), then compute
+    ``l1_ratio = ||cond||_1 / ||marginal||_1`` per (group, factor). The
+    factor's enrichment score is its max-over-groups l1_ratio. The
+    benchmark classifies factors with max l1_ratio > 1.5 as
+    "celltype_enriched"; we just sort and return the top k.
     """
-    m = json.loads(enrichment_path.read_text())
-    scores = []
-    for fkey, fdata in m["factors"].items():
-        f_idx = int(fkey.split("_")[1])
-        max_lfc = max(g.get("mean_lfc", float("-inf"))
-                      for g in fdata["groups"].values())
-        scores.append((f_idx, max_lfc))
-    scores.sort(key=lambda r: -r[1])
-    return [f for f, _ in scores[:k]]
+    marginal = np.load(method_dir / "factors.npy")          # (N, L)
+    p99 = np.percentile(marginal, 99, axis=0)
+    marginal_clipped = np.minimum(marginal, p99[None, :])
+    m_l1 = marginal_clipped.sum(axis=0)                     # (L,)
+
+    L = marginal.shape[1]
+    max_ratio_per_factor = np.zeros(L)
+    gf_dir = method_dir / "groupwise_factors"
+    for gf_path in sorted(gf_dir.glob("group_*.npy"),
+                          key=lambda p: int(p.stem.split("_")[1])):
+        cond = np.load(gf_path)
+        cond_clipped = np.minimum(cond, p99[None, :])
+        c_l1 = cond_clipped.sum(axis=0)                     # (L,)
+        ratios = c_l1 / (m_l1 + 1e-10)
+        max_ratio_per_factor = np.maximum(max_ratio_per_factor, ratios)
+
+    order = np.argsort(-max_ratio_per_factor)
+    return [int(f) for f in order[:k]]
 
 
 def _render_block(method_dir: Path, coords: np.ndarray, groups: np.ndarray,
@@ -233,8 +248,7 @@ def render(mode: str, dataset: str, out_path: Path,
     # Reference factors: from the RIGHT (treatment) method
     if ref_factor_indices is None:
         if rank_by == "enrichment":
-            ref_factor_indices = _pick_top_enriched_factors(
-                right_dir / "gene_enrichment.json", k=3)
+            ref_factor_indices = _pick_top_enriched_factors(right_dir, k=3)
         elif rank_by == "moran_i":
             ref_factor_indices = _pick_top_spatial_factors(
                 right_dir / "metrics.json", k=3)
