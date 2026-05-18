@@ -1,5 +1,9 @@
 """Three-cell-type × N-factor side-by-side panel for smNSF method comparisons.
 
+Mirrors the SF figures pipeline's groupwise_factors aesthetic (turbo cmap,
+fixed vmin=0, vmax=exp(2.3263)≈10.24, gray facecolor), so the comparison
+panels match the rest of the dissertation visually.
+
 Two driver modes:
     --mode vnngp_vs_lcgp   compares KNN-based (VNNGP-style) vs probabilistic
                            neighbor selection, both at group_diff_param=1e6
@@ -9,37 +13,39 @@ Two driver modes:
                            regular MGGP-LCGP with cross-group sharing, both
                            with probabilistic neighbor selection.
 
-Output layout matches presentation Panel2 conventions:
-    Rows   = 3 showcase cell types (CA1 pyramidal, Oligodendrocytes,
-             DentatePyramids — the standard hippocampus triad).
-    Block A (left)  = 3 factor maps from method A.
-    Block B (right) = 3 factor maps from method B.
-    Cell type label on the row's left edge.
-    Factor index labelled on each column.
-    Small horizontal gap between block A and block B for visual separation.
+Factors are MATCHED across methods by Pearson correlation on the gene
+loadings: for each reference factor in the right-side (treatment) method,
+the highest-correlated factor in the left-side (control) method is chosen.
+This means the columns in the left and right panels show the SAME biological
+program (up to model fit), not just the same numerical index.
 
 Usage:
     conda run -n factorization python paper/panel_3/plot_method_comparison.py \\
         --mode vnngp_vs_lcgp \\
         --dataset slideseq \\
-        --out paper/panel_3/vnngp_vs_lcgp_slideseq.png
+        --out paper/panel_3/figures/vnngp_vs_lcgp_slideseq.png
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 import matplotlib as mpl
 mpl.use("Agg")
 import matplotlib.pyplot as plt
-import matplotlib.gridspec as gridspec
 import numpy as np
 from PIL import Image
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT))
 
-# Publication font defaults.
+from spatial_factorization.commands.figures import plot_groupwise_factors_subset, _auto_point_size  # noqa: E402
+
+
+# Publication font defaults — match the rest of the dissertation figures.
 plt.rcParams.update({
     "font.family": "sans-serif",
     "font.sans-serif": ["Helvetica", "Arial", "DejaVu Sans"],
@@ -47,101 +53,167 @@ plt.rcParams.update({
     "ps.fonttype": 42,
 })
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-
 
 _MODE_PAIRS = {
-    # mode: (left_method_path, right_method_path, left_label, right_label,
-    #        suptitle, default_outname)
+    # mode: (left_method_path, right_method_path,
+    #        left_label_png, right_label_png, suptitle_png,
+    #        left_label_pdf, right_label_pdf, suptitle_pdf)
+    # Two title forms: plain unicode for PIL/PNG (no LaTeX rendering) and
+    # LaTeX-mathified for the matplotlib PDF re-render.
     "vnngp_vs_lcgp": (
         "group_diff_1000000_knn/mggp_lcgp",
         "group_diff_1000000_probabilistic/mggp_lcgp",
-        "VNNGP-style (knn)",
-        "LCGP (probabilistic)",
-        "Neighbor-selection strategy (group_diff_param = $\\infty$, MGGP effectively off)",
-        "vnngp_vs_lcgp",
+        "VNNGP-style (knn)", "LCGP (probabilistic)",
+        "Neighbor-selection strategy (group_diff_param = ∞, MGGP effectively off)",
+        "VNNGP-style (knn)", "LCGP (probabilistic)",
+        "Neighbor-selection strategy (group_diff_param $= \\infty$, MGGP effectively off)",
     ),
     "mggp_gain": (
         "group_diff_1000000_probabilistic/mggp_lcgp",
         "mggp_lcgp",
-        "Independent GPs ($a\\to\\infty$)",
-        "MGGP-LCGP (finite $a$)",
+        "Independent GPs (a → ∞)", "MGGP-LCGP (finite a)",
+        "Multi-group sharing (both probabilistic; only a varies)",
+        "Independent GPs ($a\\to\\infty$)", "MGGP-LCGP (finite $a$)",
         "Multi-group sharing (both probabilistic; only $a$ varies)",
-        "mggp_gain",
     ),
 }
 
 
-def _auto_point_size(n_spots: int, tissue_area: float) -> float:
-    """Heuristic point size scaling — denser tissue → smaller points."""
-    # tissue_area is the bounding-box area; aim for ~2-3x spot coverage.
-    density = n_spots / max(tissue_area, 1.0)
-    base = 4.0 / max(density ** 0.5, 0.5)
-    return max(0.15, min(base, 1.5))
+def _load_loadings(method_dir: Path) -> np.ndarray:
+    """Read (G_genes, L_factors) loadings matrix."""
+    p = method_dir / "loadings.npy"
+    if not p.exists():
+        raise FileNotFoundError(f"loadings.npy not found at {p}")
+    return np.load(p)
 
 
-def _panel_imshow(ax, X: np.ndarray, vals: np.ndarray, s: float,
-                  vmin: float, vmax: float, cmap: str = "magma") -> None:
-    """One factor-map panel."""
-    ax.scatter(X[:, 0], X[:, 1], c=vals, vmin=vmin, vmax=vmax,
-               cmap=cmap, s=s, alpha=0.85, edgecolors="none", rasterized=True)
-    ax.invert_yaxis()
-    ax.set_xticks([])
-    ax.set_yticks([])
-    ax.set_aspect("equal", adjustable="box")
-    for spine in ax.spines.values():
-        spine.set_linewidth(0.3)
-        spine.set_color("#888")
+def _match_factors(ref_loadings: np.ndarray, query_loadings: np.ndarray,
+                   ref_factor_ids: list[int]) -> list[int]:
+    """For each reference factor, return the best-matching query factor index.
 
+    Match by Pearson correlation on gene loadings (z-scored per factor across
+    genes). Each query factor can be selected at most once — if the top match
+    is already taken, the next-best unused match is used.
 
-def _per_column_limits(vals_left: np.ndarray, vals_right: np.ndarray,
-                       lo: float = 1.0, hi: float = 99.0) -> tuple[float, float]:
-    """Shared color limits per (cell-type, factor) cell across the two methods.
+    Args:
+        ref_loadings: (G, L_ref) reference loadings.
+        query_loadings: (G, L_query) query loadings.
+        ref_factor_ids: factor indices in the reference whose matches we want.
 
-    Use a common percentile-based vmin/vmax so visual comparison is fair.
+    Returns:
+        list of length ``len(ref_factor_ids)`` with the matched query factor
+        index for each (no repeats).
     """
-    pooled = np.concatenate([vals_left, vals_right])
-    pooled = pooled[np.isfinite(pooled)]
-    if pooled.size == 0:
-        return 0.0, 1.0
-    vmin, vmax = np.percentile(pooled, [lo, hi])
-    if vmin == vmax:
-        vmax = vmin + 1e-6
-    return float(vmin), float(vmax)
+    def zscore(W):
+        W = W - W.mean(axis=0, keepdims=True)
+        W = W / (W.std(axis=0, keepdims=True) + 1e-12)
+        return W
 
+    Z_ref = zscore(ref_loadings)
+    Z_query = zscore(query_loadings)
+    G = Z_ref.shape[0]
+    # (L_ref, L_query) correlation
+    C = (Z_ref.T @ Z_query) / G
 
-def _save_pub(fig, output_path: Path, dpi: int = 300) -> None:
-    output_path = Path(output_path)
-    fig.savefig(output_path, dpi=dpi, bbox_inches="tight")
-    if output_path.suffix.lower() == ".png":
-        img = Image.open(output_path)
-        if img.mode == "RGBA":
-            img.convert("RGB").save(output_path)
-        pdf_path = output_path.with_suffix(".pdf")
-        fig.savefig(pdf_path, bbox_inches="tight")
-    plt.close(fig)
+    used = set()
+    matches = []
+    for r in ref_factor_ids:
+        order = np.argsort(-np.abs(C[r]))   # descending by |r|
+        for q in order:
+            q = int(q)
+            if q in used:
+                continue
+            matches.append(q)
+            used.add(q)
+            break
+    return matches
 
 
 def _pick_top_spatial_factors(metrics_path: Path, k: int = 3) -> list[int]:
-    """Top-k factors by Moran's I from the right-side method's metrics."""
+    """Top-k factors by Moran's I."""
     m = json.loads(metrics_path.read_text())
     mi = m["moran_i"]
     sorted_idx = mi.get("sorted_indices")
     if sorted_idx is None:
-        # Compute from values
-        vals = mi["values"]
-        sorted_idx = list(np.argsort(vals)[::-1])
+        sorted_idx = list(np.argsort(mi["values"])[::-1])
     return [int(i) for i in sorted_idx[:k]]
+
+
+def _pick_top_enriched_factors(enrichment_path: Path, k: int = 3) -> list[int]:
+    """Top-k factors by max-over-groups mean log fold-change.
+
+    Reads gene_enrichment.json and for each factor takes the highest
+    per-group mean_lfc as its enrichment score. Returns the factor indices
+    sorted descending by that score.
+    """
+    m = json.loads(enrichment_path.read_text())
+    scores = []
+    for fkey, fdata in m["factors"].items():
+        f_idx = int(fkey.split("_")[1])
+        max_lfc = max(g.get("mean_lfc", float("-inf"))
+                      for g in fdata["groups"].values())
+        scores.append((f_idx, max_lfc))
+    scores.sort(key=lambda r: -r[1])
+    return [f for f, _ in scores[:k]]
+
+
+def _render_block(method_dir: Path, coords: np.ndarray, groups: np.ndarray,
+                  group_names: list[str], group_ids: list[int],
+                  factor_ids: list[int], s: float) -> plt.Figure:
+    """Generate the SF-style groupwise-factors panel for one method."""
+    factors = np.load(method_dir / "factors.npy")
+    groupwise_dir = method_dir / "groupwise_factors"
+    groupwise_factors = {}
+    for p in sorted(groupwise_dir.glob("group_*.npy"),
+                    key=lambda x: int(x.stem.split("_")[1])):
+        g = int(p.stem.split("_")[1])
+        groupwise_factors[g] = np.load(p)
+    return plot_groupwise_factors_subset(
+        factors=factors,
+        groupwise_factors=groupwise_factors,
+        coords=coords,
+        groups=groups,
+        group_names=group_names,
+        group_ids=group_ids,
+        factor_ids=factor_ids,
+        s=s,
+        cmap="turbo",
+    )
+
+
+def _fig_to_pil(fig: plt.Figure, dpi: int = 200) -> Image.Image:
+    """Render a matplotlib figure into a PIL Image (RGB) and close it."""
+    canvas = fig.canvas
+    canvas.draw()
+    w, h = canvas.get_width_height()
+    rgba = np.asarray(canvas.buffer_rgba()).reshape(h, w, 4)
+    img = Image.fromarray(rgba[..., :3].copy())
+    plt.close(fig)
+    return img
+
+
+def _save_pub(img: Image.Image, fig_for_pdf: plt.Figure | None,
+              output_path: Path) -> None:
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    img.save(output_path)
+    print(f"Saved: {output_path}")
+    if fig_for_pdf is not None and output_path.suffix.lower() == ".png":
+        pdf_path = output_path.with_suffix(".pdf")
+        fig_for_pdf.savefig(pdf_path, bbox_inches="tight")
+        print(f"Saved: {pdf_path}")
 
 
 def render(mode: str, dataset: str, out_path: Path,
            cell_type_indices: list[int] | None = None,
-           factor_indices: list[int] | None = None,
-           cmap: str = "magma") -> None:
-    """Render the comparison panel for one mode."""
+           ref_factor_indices: list[int] | None = None,
+           rank_by: str = "moran_i",
+           dpi: int = 200) -> None:
     if mode not in _MODE_PAIRS:
         raise ValueError(f"Unknown mode: {mode!r}; choose from {list(_MODE_PAIRS)}")
-    left_rel, right_rel, left_lab, right_lab, suptitle, _ = _MODE_PAIRS[mode]
+    (left_rel, right_rel,
+     left_lab, right_lab, suptitle,
+     left_lab_pdf, right_lab_pdf, suptitle_pdf) = _MODE_PAIRS[mode]
     dataset_root = REPO_ROOT / "outputs" / dataset
     left_dir = dataset_root / left_rel
     right_dir = dataset_root / right_rel
@@ -149,80 +221,121 @@ def render(mode: str, dataset: str, out_path: Path,
         if not d.exists():
             raise FileNotFoundError(f"Missing run directory: {d}")
 
-    # Cell-type metadata
+    # Metadata
     meta = json.loads((dataset_root / "preprocessed" / "metadata.json").read_text())
     group_names = meta["group_names"]
     if cell_type_indices is None:
-        # Default hippocampus triad (presentation Panel2 convention)
         wanted = ["CA1_CA2_CA3_Subiculum", "Oligodendrocytes", "DentatePyramids"]
         cell_type_indices = [group_names.index(w) for w in wanted if w in group_names]
         if len(cell_type_indices) < 3:
-            # Fall back to first three groups if the canonical names are absent.
             cell_type_indices = list(range(min(3, len(group_names))))
 
-    # Factor indices: top-3 by Moran's I on the right (treatment) method
-    if factor_indices is None:
-        factor_indices = _pick_top_spatial_factors(right_dir / "metrics.json", k=3)
+    # Reference factors: from the RIGHT (treatment) method
+    if ref_factor_indices is None:
+        if rank_by == "enrichment":
+            ref_factor_indices = _pick_top_enriched_factors(
+                right_dir / "gene_enrichment.json", k=3)
+        elif rank_by == "moran_i":
+            ref_factor_indices = _pick_top_spatial_factors(
+                right_dir / "metrics.json", k=3)
+        else:
+            raise ValueError(f"Unknown rank_by={rank_by!r}; "
+                             f"choose 'moran_i' or 'enrichment'.")
 
-    # Tissue coordinates + size heuristic
-    X = np.load(dataset_root / "preprocessed" / "X.npy")
-    bbox = (X[:, 0].max() - X[:, 0].min()) * (X[:, 1].max() - X[:, 1].min())
-    s = _auto_point_size(len(X), bbox)
-
-    n_rows = len(cell_type_indices)
-    n_factors = len(factor_indices)
-    n_cols_per_block = n_factors
-
-    # Figure geometry
-    fig_w = 1.6 * 2 * n_cols_per_block + 1.0  # 2 blocks + left margin for labels
-    fig_h = 1.6 * n_rows + 0.8                # rows + suptitle/footer
-    fig = plt.figure(figsize=(fig_w, fig_h))
-
-    outer = gridspec.GridSpec(
-        n_rows, 2, wspace=0.10, hspace=0.10, figure=fig,
-        left=0.07, right=0.99, bottom=0.06, top=0.90,
+    # Match left-side factors to right-side via gene-loading correlation
+    right_loadings = _load_loadings(right_dir)
+    left_loadings = _load_loadings(left_dir)
+    matched_left_factors = _match_factors(
+        ref_loadings=right_loadings, query_loadings=left_loadings,
+        ref_factor_ids=ref_factor_indices,
     )
 
-    for row, g in enumerate(cell_type_indices):
-        # Load conditional factor maps for this cell type.
-        left_factors = np.load(left_dir / "groupwise_factors" / f"group_{g}.npy")
-        right_factors = np.load(right_dir / "groupwise_factors" / f"group_{g}.npy")
+    # Spatial coords + groups (shared across methods — both fit the same data)
+    coords = np.load(dataset_root / "preprocessed" / "X.npy")
+    # groups vector: prefer the preprocessed C, fall back to either method's groupsZ
+    C_path = dataset_root / "preprocessed" / "C.npy"
+    if C_path.exists():
+        groups_np = np.load(C_path)
+    else:
+        groups_np = np.load(right_dir / "groupsZ.npy")
+    N = coords.shape[0]
+    s = _auto_point_size(N)
 
-        for block_idx, (block_factors, _block_dir) in enumerate(
-            [(left_factors, left_dir), (right_factors, right_dir)]
-        ):
-            inner = gridspec.GridSpecFromSubplotSpec(
-                1, n_cols_per_block, subplot_spec=outer[row, block_idx],
-                wspace=0.06,
-            )
-            for col, f_idx in enumerate(factor_indices):
-                ax = fig.add_subplot(inner[0, col])
-                vmin, vmax = _per_column_limits(
-                    left_factors[:, f_idx], right_factors[:, f_idx]
-                )
-                _panel_imshow(ax, X, block_factors[:, f_idx], s,
-                              vmin=vmin, vmax=vmax, cmap=cmap)
-                if row == 0:
-                    ax.set_title(f"Factor {f_idx}", fontsize=9, pad=3)
-                if col == 0 and block_idx == 0:
-                    ax.text(-0.18, 0.5, group_names[g].replace("_", " "),
-                            transform=ax.transAxes, rotation=90,
-                            ha="center", va="center", fontsize=9)
+    print(f"Reference factor indices (right side, top-3 by {rank_by}): {ref_factor_indices}")
+    print(f"Matched left-side factor indices (gene-loading r): {matched_left_factors}")
+    print(f"Cell-type rows: {[group_names[g] for g in cell_type_indices]}")
 
-    # Block labels above each block
-    for block_idx, lab in enumerate([left_lab, right_lab]):
-        block_left = outer[0, block_idx].get_position(fig).x0
-        block_right = outer[0, block_idx].get_position(fig).x1
-        x_mid = 0.5 * (block_left + block_right)
-        fig.text(x_mid, 0.93, lab, ha="center", va="bottom",
-                 fontsize=11, fontweight="bold")
+    fig_left = _render_block(left_dir, coords, groups_np, group_names,
+                              cell_type_indices, matched_left_factors, s)
+    fig_right = _render_block(right_dir, coords, groups_np, group_names,
+                               cell_type_indices, ref_factor_indices, s)
 
-    fig.suptitle(suptitle, fontsize=12, y=0.98)
+    img_left = _fig_to_pil(fig_left, dpi=dpi)
+    img_right = _fig_to_pil(fig_right, dpi=dpi)
 
-    _save_pub(fig, out_path)
+    # Stitch side-by-side with a small column gap + a top banner with labels.
+    gap_x = 40
+    banner_h = 80
+    W = img_left.size[0] + gap_x + img_right.size[0]
+    H = banner_h + max(img_left.size[1], img_right.size[1])
+    canvas = Image.new("RGB", (W, H), "white")
+    canvas.paste(img_left, (0, banner_h))
+    canvas.paste(img_right, (img_left.size[0] + gap_x, banner_h))
+
+    # Banner labels using matplotlib for consistent font
+    from PIL import ImageDraw
+    try:
+        from PIL import ImageFont
+        font_candidates = [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/google-droid/DroidSans-Bold.ttf",
+        ]
+        font = None
+        for fp in font_candidates:
+            if Path(fp).exists():
+                font = ImageFont.truetype(fp, 30)
+                break
+        if font is None:
+            font = ImageFont.load_default()
+    except Exception:
+        font = None
+
+    draw = ImageDraw.Draw(canvas)
+    # Suptitle on top of the canvas
+    draw.text((W // 2 - 280, 10), suptitle, fill="black", font=font)
+    # Two block labels
+    draw.text((img_left.size[0] // 2 - 120, banner_h - 36), left_lab,
+              fill="black", font=font)
+    draw.text((img_left.size[0] + gap_x + img_right.size[0] // 2 - 120,
+               banner_h - 36), right_lab, fill="black", font=font)
+
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    canvas.save(out_path)
     print(f"Saved: {out_path}")
-    if out_path.suffix.lower() == ".png":
-        print(f"Saved: {out_path.with_suffix('.pdf')}")
+
+    # Vector PDF: re-render the two blocks side-by-side via matplotlib
+    # (Pillow only writes raster). Use the existing figs scaled into one figure.
+    n_g = len(cell_type_indices)
+    n_f = len(ref_factor_indices)
+    panel_size = 2.0
+    fig_w = 2 * (n_f + 1) * panel_size + 0.4
+    fig_h = (n_g + 1) * panel_size + 1.0
+    fig_pdf = plt.figure(figsize=(fig_w, fig_h))
+    # Two subplot axes that host the rendered PIL images.
+    ax_l = fig_pdf.add_axes([0.005, 0.02, 0.495, 0.92])
+    ax_r = fig_pdf.add_axes([0.50, 0.02, 0.495, 0.92])
+    ax_l.imshow(np.asarray(img_left)); ax_l.axis("off")
+    ax_r.imshow(np.asarray(img_right)); ax_r.axis("off")
+    fig_pdf.text(0.25, 0.96, left_lab_pdf, ha="center", va="bottom",
+                 fontsize=12, fontweight="bold")
+    fig_pdf.text(0.75, 0.96, right_lab_pdf, ha="center", va="bottom",
+                 fontsize=12, fontweight="bold")
+    fig_pdf.suptitle(suptitle_pdf, fontsize=11, y=1.0)
+    pdf_path = out_path.with_suffix(".pdf")
+    fig_pdf.savefig(pdf_path, bbox_inches="tight")
+    plt.close(fig_pdf)
+    print(f"Saved: {pdf_path}")
 
 
 def main():
@@ -233,25 +346,29 @@ def main():
     p.add_argument("--cell-types", default=None,
                    help="Comma-separated cell-type names (default: hippocampus triad)")
     p.add_argument("--factors", default=None,
-                   help="Comma-separated factor indices (default: top-3 by Moran's I)")
-    p.add_argument("--cmap", default="magma")
+                   help="Comma-separated reference factor indices "
+                        "(overrides --rank-by)")
+    p.add_argument("--rank-by", choices=["moran_i", "enrichment"],
+                   default="moran_i",
+                   help="Auto-select top-3 reference factors by Moran's I "
+                        "(spatial autocorrelation) or by max-over-groups "
+                        "mean log fold-change (cell-type-enrichment).")
     args = p.parse_args()
 
     cell_type_indices = None
     if args.cell_types:
         dataset_root = REPO_ROOT / "outputs" / args.dataset
         meta = json.loads((dataset_root / "preprocessed" / "metadata.json").read_text())
-        group_names = meta["group_names"]
-        cell_type_indices = [group_names.index(c.strip()) for c in args.cell_types.split(",")]
-
+        cell_type_indices = [meta["group_names"].index(c.strip())
+                             for c in args.cell_types.split(",")]
     factor_indices = None
     if args.factors:
         factor_indices = [int(f.strip()) for f in args.factors.split(",")]
 
     render(args.mode, args.dataset, Path(args.out),
            cell_type_indices=cell_type_indices,
-           factor_indices=factor_indices,
-           cmap=args.cmap)
+           ref_factor_indices=factor_indices,
+           rank_by=args.rank_by)
 
 
 if __name__ == "__main__":
