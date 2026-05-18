@@ -268,6 +268,7 @@ def render(mode: str, dataset: str, out_path: Path,
            ref_factor_indices: list[int] | None = None,
            rank_by: str = "moran_i",
            rank_from: str = "right",
+           k: int = 3,
            dpi: int = 200) -> None:
     if mode not in _MODE_PAIRS:
         raise ValueError(f"Unknown mode: {mode!r}; choose from {list(_MODE_PAIRS)}")
@@ -294,12 +295,12 @@ def render(mode: str, dataset: str, out_path: Path,
     if ref_factor_indices is None:
         if rank_by == "enrichment":
             ref_factor_indices, auto_celltypes = _pick_enriched_factor_celltype_pairs(
-                ref_dir, k=3)
+                ref_dir, k=k)
             if cell_type_indices is None:
                 cell_type_indices = auto_celltypes
         elif rank_by == "moran_i":
             ref_factor_indices = _pick_top_spatial_factors(
-                ref_dir / "metrics.json", k=3)
+                ref_dir / "metrics.json", k=k)
         else:
             raise ValueError(f"Unknown rank_by={rank_by!r}; "
                              f"choose 'moran_i' or 'enrichment'.")
@@ -307,8 +308,8 @@ def render(mode: str, dataset: str, out_path: Path,
     if cell_type_indices is None:
         wanted = ["CA1_CA2_CA3_Subiculum", "Oligodendrocytes", "DentatePyramids"]
         cell_type_indices = [group_names.index(w) for w in wanted if w in group_names]
-        if len(cell_type_indices) < 3:
-            cell_type_indices = list(range(min(3, len(group_names))))
+        if len(cell_type_indices) < k:
+            cell_type_indices = list(range(min(k, len(group_names))))
 
     # Match the OTHER side's factors to the ref side via gene-loading correlation.
     right_loadings = _load_loadings(right_dir)
@@ -437,6 +438,9 @@ def main():
                    help="Which method picks reference factors + cell-type "
                         "rows. The other method's columns are matched in via "
                         "gene-loading correlation.")
+    p.add_argument("-k", "--n-factors", type=int, default=3,
+                   help="Number of (factor, cell-type) pairs to show "
+                        "(rows × columns). Default 3.")
     args = p.parse_args()
 
     cell_type_indices = None
@@ -453,7 +457,8 @@ def main():
            cell_type_indices=cell_type_indices,
            ref_factor_indices=factor_indices,
            rank_by=args.rank_by,
-           rank_from=args.rank_from)
+           rank_from=args.rank_from,
+           k=args.n_factors)
 
 
 if __name__ == "__main__":
