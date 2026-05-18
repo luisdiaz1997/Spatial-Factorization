@@ -179,6 +179,128 @@ def _pick_top_enriched_factors(method_dir: Path, k: int = 3) -> list[int]:
     return [int(f) for f in order[:k]]
 
 
+def _pick_top_universal_factors(method_dir: Path, k: int = 3) -> list[int]:
+    """Top-k 'universal' factors by Shannon entropy of normalized L1 ratios.
+
+    Mirrors the ``universal`` class definition in
+    benchmark_analyze._compute_factor_specificity: a factor is universal
+    when its conditional/marginal L1 ratios are ~uniform across cell
+    types (no group preferentially enriched or depleted). We z-shift
+    the log-ratios into a non-negative distribution, normalize to a
+    probability vector, and rank factors by Shannon entropy (descending);
+    the top-k are the most uniform.
+    """
+    M = _l1_ratio_matrix(method_dir)                     # (G, L)
+    G, L = M.shape
+    log_r = np.log2(np.maximum(M, 1e-10))
+    shifted = np.clip(log_r + 1.0, 0.0, None)
+    col_sums = shifted.sum(axis=0, keepdims=True) + 1e-10
+    P = shifted / col_sums                              # (G, L) prob columns
+    with np.errstate(divide="ignore", invalid="ignore"):
+        H_unnorm = -np.nansum(P * np.log2(np.where(P > 0, P, 1.0)), axis=0)
+    H = H_unnorm / np.log2(G)
+    order = np.argsort(-H)
+    return [int(f) for f in order[:k]]
+
+
+def _pick_universal_with_argmin_celltype(
+    method_dir: Path, k: int = 3, candidate_pool: int = 10,
+) -> tuple[list[int], list[int]]:
+    """Top-k universal factors paired with their most-depleted cell type.
+
+    For each universal factor (top by Shannon entropy), use the cell type
+    with the lowest L1 ratio for that factor (i.e. the cell type where the
+    universal factor is most depleted) as the row. Cell-type indices are
+    deduplicated; if two factors would share the same argmin cell type the
+    second falls back to its next-most-depleted unused cell type.
+
+    Returns:
+        (factor_indices, celltype_indices) — each of length ``k``.
+    """
+    M = _l1_ratio_matrix(method_dir)
+    candidates = _pick_top_universal_factors(method_dir, k=candidate_pool)
+
+    used_cts: set[int] = set()
+    selected_factors: list[int] = []
+    selected_celltypes: list[int] = []
+    for f in candidates:
+        col = M[:, f]
+        for ct in np.argsort(col):       # ascending: most depleted first
+            ct = int(ct)
+            if ct not in used_cts:
+                selected_factors.append(int(f))
+                selected_celltypes.append(ct)
+                used_cts.add(ct)
+                break
+        if len(selected_factors) >= k:
+            break
+    return selected_factors, selected_celltypes
+
+
+def _pick_universal_depleted_pairs(
+    ref_dir: Path, other_dir: Path, k: int = 3,
+    candidate_pool: int = 10,
+) -> tuple[list[int], list[int]]:
+    """Universal factors in ``ref_dir`` whose matches in ``other_dir`` are
+    most depleted.
+
+    For each candidate universal factor in ``ref_dir`` (top by Shannon
+    entropy), find the matched factor in ``other_dir`` via gene-loading
+    Pearson correlation, then locate the cell type where the matched
+    factor's L1 ratio in ``other_dir`` is lowest (most depleted). Returns
+    the top-k pairs sorted by depletion severity, with cell-type indices
+    deduplicated.
+
+    The intent is to surface the failure mode of the ``other_dir`` method:
+    factors that are universal under the reference model but collapse
+    under the alternative.
+
+    Returns:
+        (ref_factor_indices, celltype_indices) — each of length ``k``.
+    """
+    candidates = _pick_top_universal_factors(ref_dir, k=candidate_pool)
+    ref_loadings = _load_loadings(ref_dir)
+    other_loadings = _load_loadings(other_dir)
+    matched = _match_factors(
+        ref_loadings=ref_loadings,
+        query_loadings=other_loadings,
+        ref_factor_ids=candidates,
+    )
+    other_M = _l1_ratio_matrix(other_dir)               # (G, L)
+
+    # For each candidate, find its (cell_type, ratio) where ratio is minimal.
+    candidate_pairs = []
+    for f_ref, f_other in zip(candidates, matched):
+        col = other_M[:, f_other]
+        ct = int(np.argmin(col))
+        candidate_pairs.append((f_ref, ct, float(col[ct])))
+
+    # Sort by depletion severity (lowest ratio first).
+    candidate_pairs.sort(key=lambda r: r[2])
+
+    selected_factors: list[int] = []
+    selected_celltypes: list[int] = []
+    used_cts: set[int] = set()
+    for f_ref, ct, ratio in candidate_pairs:
+        if ct in used_cts:
+            # Fall through to next-most-depleted cell type for this factor.
+            col = other_M[:, matched[candidates.index(f_ref)]]
+            for ct2 in np.argsort(col):
+                ct2 = int(ct2)
+                if ct2 not in used_cts:
+                    ct = ct2
+                    ratio = float(col[ct2])
+                    break
+            else:
+                continue
+        selected_factors.append(int(f_ref))
+        selected_celltypes.append(ct)
+        used_cts.add(ct)
+        if len(selected_factors) >= k:
+            break
+    return selected_factors, selected_celltypes
+
+
 def _pick_enriched_factor_celltype_pairs(
     method_dir: Path, k: int = 3
 ) -> tuple[list[int], list[int]]:
@@ -380,18 +502,39 @@ def render(mode: str, dataset: str, out_path: Path,
                 ref_dir, k=k)
             if cell_type_indices is None:
                 cell_type_indices = auto_celltypes
+        elif rank_by == "universal":
+            # Top universal factors paired with each one's most-depleted
+            # cell type (argmin L1 ratio within that factor's distribution).
+            # A universal factor is by definition near 1.0 across cell types;
+            # the argmin row exposes where universality is weakest.
+            ref_factor_indices, auto_celltypes = _pick_universal_with_argmin_celltype(
+                ref_dir, k=k)
+            if cell_type_indices is None:
+                cell_type_indices = auto_celltypes
+        elif rank_by == "universal_depleted":
+            # Pick universal factors in ref_dir whose matched factor in the
+            # OTHER side is most depleted (lowest L1 ratio for some cell
+            # type). The chosen cell type for each row is that argmin
+            # cell type from the other side — this is the failure mode
+            # we want to expose.
+            other_dir = right_dir if rank_from == "left" else left_dir
+            ref_factor_indices, auto_celltypes = _pick_universal_depleted_pairs(
+                ref_dir, other_dir, k=k)
+            if cell_type_indices is None:
+                cell_type_indices = auto_celltypes
         elif rank_by == "moran_i":
             ref_factor_indices = _pick_top_spatial_factors(
                 ref_dir / "metrics.json", k=k)
         else:
             raise ValueError(f"Unknown rank_by={rank_by!r}; "
-                             f"choose 'moran_i' or 'enrichment'.")
+                             f"choose 'moran_i', 'enrichment', or 'universal'.")
 
     if cell_type_indices is None:
         wanted = ["CA1_CA2_CA3_Subiculum", "Oligodendrocytes", "DentatePyramids"]
         cell_type_indices = [group_names.index(w) for w in wanted if w in group_names]
         if len(cell_type_indices) < k:
             cell_type_indices = list(range(min(k, len(group_names))))
+        cell_type_indices = cell_type_indices[:k]
 
     # Match the OTHER side's factors to the ref side via gene-loading correlation.
     right_loadings = _load_loadings(right_dir)
@@ -514,12 +657,19 @@ def main():
     p.add_argument("--factors", default=None,
                    help="Comma-separated reference factor indices "
                         "(overrides --rank-by)")
-    p.add_argument("--rank-by", choices=["moran_i", "enrichment"],
+    p.add_argument("--rank-by",
+                   choices=["moran_i", "enrichment", "universal",
+                            "universal_depleted"],
                    default="moran_i",
-                   help="Auto-select top-3 reference factors by Moran's I "
-                        "(spatial autocorrelation) or by max-over-groups L1 "
-                        "specificity ratio (benchmark-style cell-type "
-                        "enrichment).")
+                   help="Auto-select reference factors. moran_i: highest "
+                        "spatial autocorrelation. enrichment: highest "
+                        "max-over-groups L1 specificity ratio (benchmark "
+                        "celltype_enriched class). universal: highest "
+                        "Shannon entropy of normalized L1 ratios (benchmark "
+                        "universal class). universal_depleted: universal "
+                        "factors in the ref side whose matched factor in "
+                        "the OTHER side is most depleted; row cell types "
+                        "are the argmin-L1 group on the other side.")
     p.add_argument("--rank-from", choices=["left", "right"], default="right",
                    help="Which method picks reference factors + cell-type "
                         "rows. The other method's columns are matched in via "
