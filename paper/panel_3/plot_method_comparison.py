@@ -139,37 +139,81 @@ def _pick_top_spatial_factors(metrics_path: Path, k: int = 3) -> list[int]:
     return [int(i) for i in sorted_idx[:k]]
 
 
-def _pick_top_enriched_factors(method_dir: Path, k: int = 3) -> list[int]:
-    """Top-k factors by max-over-groups L1 specificity ratio.
+def _l1_ratio_matrix(method_dir: Path) -> np.ndarray:
+    """Return the (n_groups, n_factors) L1 specificity-ratio matrix.
 
-    Mirrors the benchmark pipeline (spatial_factorization.commands.
-    benchmark_analyze._compute_factor_specificity): for each factor, clip
-    both the marginal (unconditional) and per-group conditional factor maps
-    at the per-factor 99th percentile of the marginal (to prevent
-    GP-extrapolation outliers from dominating the L1 sum), then compute
-    ``l1_ratio = ||cond||_1 / ||marginal||_1`` per (group, factor). The
-    factor's enrichment score is its max-over-groups l1_ratio. The
-    benchmark classifies factors with max l1_ratio > 1.5 as
-    "celltype_enriched"; we just sort and return the top k.
+    Mirrors the benchmark pipeline (``benchmark_analyze.
+    _compute_factor_specificity``): both marginal and per-group conditional
+    factor maps are clipped at the per-factor 99th percentile of the
+    marginal before L1 is taken, to prevent GP-extrapolation outliers from
+    dominating. Row ``g``, column ``f`` is
+    ``||cond[g, :, f]_clipped||_1 / ||marginal[:, f]_clipped||_1``.
+    Benchmark calls factors with max-over-groups ratio > 1.5
+    "celltype_enriched".
     """
     marginal = np.load(method_dir / "factors.npy")          # (N, L)
     p99 = np.percentile(marginal, 99, axis=0)
     marginal_clipped = np.minimum(marginal, p99[None, :])
     m_l1 = marginal_clipped.sum(axis=0)                     # (L,)
 
-    L = marginal.shape[1]
-    max_ratio_per_factor = np.zeros(L)
     gf_dir = method_dir / "groupwise_factors"
-    for gf_path in sorted(gf_dir.glob("group_*.npy"),
-                          key=lambda p: int(p.stem.split("_")[1])):
+    gf_paths = sorted(gf_dir.glob("group_*.npy"),
+                      key=lambda p: int(p.stem.split("_")[1]))
+    G = len(gf_paths)
+    L = marginal.shape[1]
+    M = np.zeros((G, L), dtype=float)
+    for row_g, gf_path in enumerate(gf_paths):
+        g = int(gf_path.stem.split("_")[1])
         cond = np.load(gf_path)
         cond_clipped = np.minimum(cond, p99[None, :])
-        c_l1 = cond_clipped.sum(axis=0)                     # (L,)
-        ratios = c_l1 / (m_l1 + 1e-10)
-        max_ratio_per_factor = np.maximum(max_ratio_per_factor, ratios)
+        c_l1 = cond_clipped.sum(axis=0)
+        M[g] = c_l1 / (m_l1 + 1e-10)
+    return M
 
+
+def _pick_top_enriched_factors(method_dir: Path, k: int = 3) -> list[int]:
+    """Top-k factors by max-over-groups L1 specificity ratio."""
+    M = _l1_ratio_matrix(method_dir)
+    max_ratio_per_factor = M.max(axis=0)
     order = np.argsort(-max_ratio_per_factor)
     return [int(f) for f in order[:k]]
+
+
+def _pick_enriched_factor_celltype_pairs(
+    method_dir: Path, k: int = 3
+) -> tuple[list[int], list[int]]:
+    """Top-k (factor, cell-type) pairs by L1 specificity, one row per factor.
+
+    For each of the top-k factors (ranked by max-over-groups L1 ratio),
+    return the cell-type index that maximizes that factor's L1 ratio.
+    Cell-type indices are deduplicated: if two factors point to the same
+    cell type, the later factor falls back to its next-best (unused)
+    cell type.
+
+    Returns:
+        (factor_indices, celltype_indices) — both lists length ``k``,
+        in factor-rank order.
+    """
+    M = _l1_ratio_matrix(method_dir)                          # (G, L)
+    max_ratio = M.max(axis=0)
+    factor_order = np.argsort(-max_ratio)
+
+    selected_factors: list[int] = []
+    selected_celltypes: list[int] = []
+    used_celltypes: set[int] = set()
+    for f in factor_order:
+        if len(selected_factors) >= k:
+            break
+        # Cell-type order for this factor, descending by ratio
+        ct_order = np.argsort(-M[:, f])
+        for ct in ct_order:
+            ct = int(ct)
+            if ct not in used_celltypes:
+                selected_factors.append(int(f))
+                selected_celltypes.append(ct)
+                used_celltypes.add(ct)
+                break
+    return selected_factors, selected_celltypes
 
 
 def _render_block(method_dir: Path, coords: np.ndarray, groups: np.ndarray,
@@ -239,22 +283,28 @@ def render(mode: str, dataset: str, out_path: Path,
     # Metadata
     meta = json.loads((dataset_root / "preprocessed" / "metadata.json").read_text())
     group_names = meta["group_names"]
-    if cell_type_indices is None:
-        wanted = ["CA1_CA2_CA3_Subiculum", "Oligodendrocytes", "DentatePyramids"]
-        cell_type_indices = [group_names.index(w) for w in wanted if w in group_names]
-        if len(cell_type_indices) < 3:
-            cell_type_indices = list(range(min(3, len(group_names))))
 
-    # Reference factors: from the RIGHT (treatment) method
+    # Reference factors + cell-type rows: derive from the RIGHT (treatment) method
     if ref_factor_indices is None:
         if rank_by == "enrichment":
-            ref_factor_indices = _pick_top_enriched_factors(right_dir, k=3)
+            # Each of the top-3 enriched factors picks its OWN most-enriched
+            # cell type for its row; cell-type rows are deduplicated.
+            ref_factor_indices, auto_celltypes = _pick_enriched_factor_celltype_pairs(
+                right_dir, k=3)
+            if cell_type_indices is None:
+                cell_type_indices = auto_celltypes
         elif rank_by == "moran_i":
             ref_factor_indices = _pick_top_spatial_factors(
                 right_dir / "metrics.json", k=3)
         else:
             raise ValueError(f"Unknown rank_by={rank_by!r}; "
                              f"choose 'moran_i' or 'enrichment'.")
+
+    if cell_type_indices is None:
+        wanted = ["CA1_CA2_CA3_Subiculum", "Oligodendrocytes", "DentatePyramids"]
+        cell_type_indices = [group_names.index(w) for w in wanted if w in group_names]
+        if len(cell_type_indices) < 3:
+            cell_type_indices = list(range(min(3, len(group_names))))
 
     # Match left-side factors to right-side via gene-loading correlation
     right_loadings = _load_loadings(right_dir)
