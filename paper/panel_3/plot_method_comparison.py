@@ -216,10 +216,38 @@ def _pick_enriched_factor_celltype_pairs(
     return selected_factors, selected_celltypes
 
 
+def _draw_group_loc_panel(ax, coords, groups, group_idx, s):
+    """Binary 'is-this-cell-type' panel (white = group, black = other)."""
+    mask = groups == group_idx
+    ax.scatter(coords[~mask, 0], coords[~mask, 1], c="#222", s=s, alpha=0.6,
+               edgecolors="none", rasterized=True)
+    ax.scatter(coords[mask, 0], coords[mask, 1], c="#f0f0f0", s=s, alpha=0.95,
+               edgecolors="none", rasterized=True)
+    ax.invert_yaxis()
+    ax.set_xticks([]); ax.set_yticks([])
+    ax.set_aspect("equal", adjustable="box")
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+
 def _render_block(method_dir: Path, coords: np.ndarray, groups: np.ndarray,
                   group_names: list[str], group_ids: list[int],
-                  factor_ids: list[int], s: float) -> plt.Figure:
-    """Generate the SF-style groupwise-factors panel for one method."""
+                  factor_ids: list[int], s: float,
+                  show_group_loc: bool = True,
+                  show_row_labels: bool = True) -> plt.Figure:
+    """SF-style groupwise-factors panel for one method.
+
+    Args:
+        show_group_loc: if True, includes the 'is-this-cell-type' panel as
+            the leftmost column of each row. When two blocks are placed
+            side-by-side, the right block should set this False (the left
+            block already shows the cell-type identities).
+        show_row_labels: if True, prints the cell-type name to the left of
+            the row. When show_group_loc is True the label sits in the
+            margin to the left of the loc panel; when False it sits to the
+            left of the first factor panel.
+    """
+    import textwrap
     factors = np.load(method_dir / "factors.npy")
     groupwise_dir = method_dir / "groupwise_factors"
     groupwise_factors = {}
@@ -227,26 +255,80 @@ def _render_block(method_dir: Path, coords: np.ndarray, groups: np.ndarray,
                     key=lambda x: int(x.stem.split("_")[1])):
         g = int(p.stem.split("_")[1])
         groupwise_factors[g] = np.load(p)
-    return plot_groupwise_factors_subset(
-        factors=factors,
-        groupwise_factors=groupwise_factors,
-        coords=coords,
-        groups=groups,
-        group_names=group_names,
-        group_ids=group_ids,
-        factor_ids=factor_ids,
-        s=s,
-        cmap="turbo",
+
+    vmin = 0.0
+    vmax = np.exp(2.3263)
+    panel_size = 2.5
+    n_rows = len(group_ids) + 1                          # +1 for unconditional row
+    n_cols = len(factor_ids) + (1 if show_group_loc else 0)
+
+    fig, axes = plt.subplots(
+        n_rows, n_cols,
+        figsize=(n_cols * panel_size, n_rows * panel_size),
+        squeeze=False,
+        gridspec_kw=dict(wspace=0.05, hspace=0.05),
     )
+
+    # Row 0: unconditional factor maps (no loc panel above the loc column)
+    for col_idx, l in enumerate(factor_ids):
+        ax = axes[0, col_idx + (1 if show_group_loc else 0)]
+        ax.scatter(coords[:, 0], coords[:, 1], c=factors[:, l],
+                   vmin=vmin, vmax=vmax, cmap="turbo", s=s, alpha=0.8,
+                   edgecolors="none", rasterized=True)
+        ax.invert_yaxis()
+        ax.set_xticks([]); ax.set_yticks([])
+        ax.set_facecolor("gray")
+        ax.set_title(f"Factor {l + 1}", fontsize=10)
+    if show_group_loc:
+        axes[0, 0].set_visible(False)
+
+    # Rows 1..: per-group
+    for row_idx, g in enumerate(group_ids):
+        raw_name = group_names[g] if g < len(group_names) else f"group_{g}"
+        # Keep the label on a single line if possible by using a wider wrap.
+        display_name = textwrap.fill(raw_name.replace("_", " "), width=22)
+
+        first_factor_col = 1 if show_group_loc else 0
+        if show_group_loc:
+            ax_loc = axes[row_idx + 1, 0]
+            _draw_group_loc_panel(ax_loc, coords, groups, g, s=s)
+            if show_row_labels:
+                ax_loc.set_ylabel(display_name, rotation=0, fontsize=11,
+                                  labelpad=15, ha="right", va="center")
+
+        factors_g = groupwise_factors.get(g)
+        for col_idx, l in enumerate(factor_ids):
+            ax = axes[row_idx + 1, col_idx + first_factor_col]
+            if factors_g is not None:
+                ax.scatter(coords[:, 0], coords[:, 1], c=factors_g[:, l],
+                           vmin=vmin, vmax=vmax, cmap="turbo", s=s, alpha=0.8,
+                           edgecolors="none", rasterized=True)
+            ax.invert_yaxis()
+            ax.set_xticks([]); ax.set_yticks([])
+            ax.set_facecolor("gray")
+
+            # When the loc panel is absent, hang the row label off the first
+            # factor panel instead.
+            if (not show_group_loc) and show_row_labels and col_idx == 0:
+                ax.set_ylabel(display_name, rotation=0, fontsize=11,
+                              labelpad=15, ha="right", va="center")
+
+    return fig
 
 
 def _fig_to_pil(fig: plt.Figure, dpi: int = 200) -> Image.Image:
-    """Render a matplotlib figure into a PIL Image (RGB) and close it."""
-    canvas = fig.canvas
-    canvas.draw()
-    w, h = canvas.get_width_height()
-    rgba = np.asarray(canvas.buffer_rgba()).reshape(h, w, 4)
-    img = Image.fromarray(rgba[..., :3].copy())
+    """Render a matplotlib figure to PIL via bbox_inches='tight'.
+
+    Going through a temp PNG ensures matplotlib expands the figure bbox to
+    include row labels / suptitles that fall outside the original axes
+    rectangle. The simpler ``canvas.draw()`` path crops those off.
+    """
+    import io
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight", facecolor="white")
+    buf.seek(0)
+    img = Image.open(buf).convert("RGB").copy()
+    buf.close()
     plt.close(fig)
     return img
 
@@ -345,10 +427,14 @@ def render(mode: str, dataset: str, out_path: Path,
     print(f"Matched {other_side}-side factor indices (gene-loading r): {other_idx}")
     print(f"Cell-type rows: {[group_names[g] for g in cell_type_indices]}")
 
+    # Left block carries the cell-type location panel + row labels;
+    # right block omits both to avoid redundancy when stitched together.
     fig_left = _render_block(left_dir, coords, groups_np, group_names,
-                              cell_type_indices, left_factor_indices, s)
+                              cell_type_indices, left_factor_indices, s,
+                              show_group_loc=True, show_row_labels=True)
     fig_right = _render_block(right_dir, coords, groups_np, group_names,
-                               cell_type_indices, right_factor_indices, s)
+                               cell_type_indices, right_factor_indices, s,
+                               show_group_loc=False, show_row_labels=False)
 
     img_left = _fig_to_pil(fig_left, dpi=dpi)
     img_right = _fig_to_pil(fig_right, dpi=dpi)
