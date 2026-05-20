@@ -37,6 +37,7 @@ import matplotlib as mpl
 mpl.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 from PIL import Image
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -71,7 +72,7 @@ _MODE_PAIRS = {
     "mggp_gain": (
         "group_diff_1000000_probabilistic/mggp_lcgp",
         "mggp_lcgp",
-        "Independent GPs (a → ∞)", "MGGP-LCGP (finite a)",
+        "Independent GPs (a -> infinity)", "MGGP-LCGP (finite a)",
         "Multi-group sharing (both probabilistic; only a varies)",
         "Independent GPs ($a\\to\\infty$)", "MGGP-LCGP (finite $a$)",
         "Multi-group sharing (both probabilistic; only $a$ varies)",
@@ -180,27 +181,21 @@ def _pick_top_enriched_factors(method_dir: Path, k: int = 3) -> list[int]:
 
 
 def _pick_top_universal_factors(method_dir: Path, k: int = 3) -> list[int]:
-    """Top-k 'universal' factors by Shannon entropy of normalized L1 ratios.
+    """Top-k factors classified as ``universal`` in ``factor_entropy.csv``.
 
-    Mirrors the ``universal`` class definition in
-    benchmark_analyze._compute_factor_specificity: a factor is universal
-    when its conditional/marginal L1 ratios are ~uniform across cell
-    types (no group preferentially enriched or depleted). We z-shift
-    the log-ratios into a non-negative distribution, normalize to a
-    probability vector, and rank factors by Shannon entropy (descending);
-    the top-k are the most uniform.
+    Uses the saved class assignment from benchmark_analyze (which writes
+    factor_entropy.csv with shannon_entropy + class columns). Returns up
+    to ``k`` universal-class factors ranked by descending Shannon entropy.
     """
-    M = _l1_ratio_matrix(method_dir)                     # (G, L)
-    G, L = M.shape
-    log_r = np.log2(np.maximum(M, 1e-10))
-    shifted = np.clip(log_r + 1.0, 0.0, None)
-    col_sums = shifted.sum(axis=0, keepdims=True) + 1e-10
-    P = shifted / col_sums                              # (G, L) prob columns
-    with np.errstate(divide="ignore", invalid="ignore"):
-        H_unnorm = -np.nansum(P * np.log2(np.where(P > 0, P, 1.0)), axis=0)
-    H = H_unnorm / np.log2(G)
-    order = np.argsort(-H)
-    return [int(f) for f in order[:k]]
+    csv = method_dir / "factor_entropy.csv"
+    if not csv.exists():
+        raise FileNotFoundError(f"Missing factor_entropy.csv at {csv}")
+    df = pd.read_csv(csv)
+    universal = df[df["class"] == "universal"].sort_values(
+        "shannon_entropy", ascending=False)
+    if len(universal) == 0:
+        raise ValueError(f"No universal-class factors found in {csv}")
+    return [int(f) for f in universal["factor_idx"].tolist()[:k]]
 
 
 def _pick_universal_with_argmin_celltype(
@@ -240,6 +235,7 @@ def _pick_universal_with_argmin_celltype(
 def _pick_universal_depleted_pairs(
     ref_dir: Path, other_dir: Path, k: int = 3,
     candidate_pool: int = 10,
+    n_celltypes: int | None = None,
 ) -> tuple[list[int], list[int]]:
     """Universal factors in ``ref_dir`` whose matches in ``other_dir`` are
     most depleted.
@@ -298,6 +294,15 @@ def _pick_universal_depleted_pairs(
         used_cts.add(ct)
         if len(selected_factors) >= k:
             break
+
+    if n_celltypes is not None and n_celltypes != len(selected_celltypes):
+        # Expand (or contract) cell-type rows: rank all groups by minimum L1
+        # ratio across the selected factors (most-depleted across any chosen
+        # universal factor wins).
+        sel_cols = [matched[candidates.index(f)] for f in selected_factors]
+        min_per_ct = other_M[:, sel_cols].min(axis=1)
+        order = np.argsort(min_per_ct)
+        selected_celltypes = [int(c) for c in order[:n_celltypes]]
     return selected_factors, selected_celltypes
 
 
@@ -473,6 +478,7 @@ def render(mode: str, dataset: str, out_path: Path,
            rank_by: str = "moran_i",
            rank_from: str = "right",
            k: int = 3,
+           n_celltypes: int | None = None,
            dpi: int = 200) -> None:
     if mode not in _MODE_PAIRS:
         raise ValueError(f"Unknown mode: {mode!r}; choose from {list(_MODE_PAIRS)}")
@@ -519,7 +525,7 @@ def render(mode: str, dataset: str, out_path: Path,
             # we want to expose.
             other_dir = right_dir if rank_from == "left" else left_dir
             ref_factor_indices, auto_celltypes = _pick_universal_depleted_pairs(
-                ref_dir, other_dir, k=k)
+                ref_dir, other_dir, k=k, n_celltypes=n_celltypes)
             if cell_type_indices is None:
                 cell_type_indices = auto_celltypes
         elif rank_by == "moran_i":
@@ -530,11 +536,12 @@ def render(mode: str, dataset: str, out_path: Path,
                              f"choose 'moran_i', 'enrichment', or 'universal'.")
 
     if cell_type_indices is None:
+        n_ct = n_celltypes if n_celltypes is not None else k
         wanted = ["CA1_CA2_CA3_Subiculum", "Oligodendrocytes", "DentatePyramids"]
         cell_type_indices = [group_names.index(w) for w in wanted if w in group_names]
-        if len(cell_type_indices) < k:
-            cell_type_indices = list(range(min(k, len(group_names))))
-        cell_type_indices = cell_type_indices[:k]
+        if len(cell_type_indices) < n_ct:
+            cell_type_indices = list(range(min(n_ct, len(group_names))))
+        cell_type_indices = cell_type_indices[:n_ct]
 
     # Match the OTHER side's factors to the ref side via gene-loading correlation.
     right_loadings = _load_loadings(right_dir)
@@ -583,8 +590,10 @@ def render(mode: str, dataset: str, out_path: Path,
     img_right = _fig_to_pil(fig_right, dpi=dpi)
 
     # Stitch side-by-side with a small column gap + a top banner with labels.
+    # Subplot titles only; no global suptitle (left/right block labels are
+    # sufficient and the panel already conveys the comparison).
     gap_x = 40
-    banner_h = 80
+    banner_h = 50
     W = img_left.size[0] + gap_x + img_right.size[0]
     H = banner_h + max(img_left.size[1], img_right.size[1])
     canvas = Image.new("RGB", (W, H), "white")
@@ -610,13 +619,32 @@ def render(mode: str, dataset: str, out_path: Path,
         font = None
 
     draw = ImageDraw.Draw(canvas)
-    # Suptitle on top of the canvas
-    draw.text((W // 2 - 280, 10), suptitle, fill="black", font=font)
-    # Two block labels
-    draw.text((img_left.size[0] // 2 - 120, banner_h - 36), left_lab,
-              fill="black", font=font)
-    draw.text((img_left.size[0] + gap_x + img_right.size[0] // 2 - 120,
-               banner_h - 36), right_lab, fill="black", font=font)
+
+    def _text_width(text: str) -> int:
+        try:
+            bbox = font.getbbox(text)
+            return bbox[2] - bbox[0]
+        except Exception:
+            return 8 * len(text)  # rough fallback
+
+    label_y = banner_h - 40
+    # Left block label, centered over the factor columns only (the left block
+    # has an extra cell-type-location column at column 0 that should not pull
+    # the title leftward).
+    n_left_cols = len(left_factor_indices) + 1  # cell-type-loc + factors
+    left_factor_x0 = img_left.size[0] / n_left_cols  # start of factor area
+    # ``img_left`` is rendered with bbox_inches="tight", so it includes the
+    # row-label margin to the left of the location column. Compensate for that
+    # extra margin when centering the title over the factor columns.
+    left_cx = int(left_factor_x0 + (img_left.size[0] - left_factor_x0) / 2
+                  + 0.025 * img_left.size[0])
+    draw.text((left_cx - _text_width(left_lab) // 2, label_y),
+              left_lab, fill="black", font=font)
+    # Right block label, centered over the right subplot's factor columns
+    # (no cell-type-location column on this side).
+    right_cx = img_left.size[0] + gap_x + img_right.size[0] // 2
+    draw.text((right_cx - _text_width(right_lab) // 2, label_y),
+              right_lab, fill="black", font=font)
 
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -624,26 +652,12 @@ def render(mode: str, dataset: str, out_path: Path,
     print(f"Saved: {out_path}")
 
     # Vector PDF: re-render the two blocks side-by-side via matplotlib
-    # (Pillow only writes raster). Use the existing figs scaled into one figure.
-    n_g = len(cell_type_indices)
-    n_f = len(ref_factor_indices)
-    panel_size = 2.0
-    fig_w = 2 * (n_f + 1) * panel_size + 0.4
-    fig_h = (n_g + 1) * panel_size + 1.0
-    fig_pdf = plt.figure(figsize=(fig_w, fig_h))
-    # Two subplot axes that host the rendered PIL images.
-    ax_l = fig_pdf.add_axes([0.005, 0.02, 0.495, 0.92])
-    ax_r = fig_pdf.add_axes([0.50, 0.02, 0.495, 0.92])
-    ax_l.imshow(np.asarray(img_left)); ax_l.axis("off")
-    ax_r.imshow(np.asarray(img_right)); ax_r.axis("off")
-    fig_pdf.text(0.25, 0.96, left_lab_pdf, ha="center", va="bottom",
-                 fontsize=12, fontweight="bold")
-    fig_pdf.text(0.75, 0.96, right_lab_pdf, ha="center", va="bottom",
-                 fontsize=12, fontweight="bold")
-    fig_pdf.suptitle(suptitle_pdf, fontsize=11, y=1.0)
+    # PDF: save the same PIL canvas to PDF so the PNG and PDF have identical
+    # layout (titles, alignment, banner). Pillow can write RGB images to PDF
+    # directly. This avoids the imshow-in-matplotlib-axes path, which added
+    # aspect-ratio padding that misaligned the left title relative to the PNG.
     pdf_path = out_path.with_suffix(".pdf")
-    fig_pdf.savefig(pdf_path, bbox_inches="tight")
-    plt.close(fig_pdf)
+    canvas.save(pdf_path, "PDF", resolution=dpi)
     print(f"Saved: {pdf_path}")
 
 
@@ -677,6 +691,11 @@ def main():
     p.add_argument("-k", "--n-factors", type=int, default=3,
                    help="Number of (factor, cell-type) pairs to show "
                         "(rows × columns). Default 3.")
+    p.add_argument("--n-celltypes", type=int, default=None,
+                   help="Number of cell-type rows (defaults to --n-factors). "
+                        "When --rank-by=universal_depleted, the extra rows are "
+                        "the next-most-depleted cell types across the chosen "
+                        "universal factors.")
     args = p.parse_args()
 
     cell_type_indices = None
@@ -694,7 +713,8 @@ def main():
            ref_factor_indices=factor_indices,
            rank_by=args.rank_by,
            rank_from=args.rank_from,
-           k=args.n_factors)
+           k=args.n_factors,
+           n_celltypes=args.n_celltypes)
 
 
 if __name__ == "__main__":
