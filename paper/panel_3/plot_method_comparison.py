@@ -9,7 +9,7 @@ Two driver modes:
                            neighbor selection, both at group_diff_param=1e6
                            (so MGGP is effectively turned off and the
                            comparison isolates neighbor-selection strategy).
-    --mode mggp_gain       compares a≈∞ (~independent GPs per group) vs
+    --mode mggp_gain       compares a≈∞ (~separate GPs per group) vs
                            regular MGGP-LCGP with cross-group sharing, both
                            with probabilistic neighbor selection.
 
@@ -72,9 +72,9 @@ _MODE_PAIRS = {
     "mggp_gain": (
         "group_diff_1000000_probabilistic/mggp_lcgp",
         "mggp_lcgp",
-        "Independent GPs (a -> infinity)", "MGGP-LCGP (finite a)",
+        "Separate GPs (a -> infinity)", "MGGP-LCGP (finite a)",
         "Multi-group sharing (both probabilistic; only a varies)",
-        "Independent GPs ($a\\to\\infty$)", "MGGP-LCGP (finite $a$)",
+        "Separate GPs ($a\\to\\infty$)", "MGGP-LCGP (finite $a$)",
         "Multi-group sharing (both probabilistic; only $a$ varies)",
     ),
 }
